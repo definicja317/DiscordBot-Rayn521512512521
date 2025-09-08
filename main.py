@@ -147,9 +147,13 @@ async def ping_cayo(interaction: discord.Interaction, role: discord.Role, channe
     await interaction.channel.send(content=f"@everyone {role.mention}", embed=embed)
     await interaction.response.send_message("Ogłoszenie o ataku wysłane!", ephemeral=True)
 
+# --- POPRAWIONA KOMENDA AIRDROP ---
 @tree.command(name="airdrop", description="Wysyła ogłoszenie o airdropie z możliwością zapisu.")
 @app_commands.describe(channel="Kanał, na który wysłać ogłoszenie", voice="Kanał głosowy", role="Rola do spingowania", opis="Wiadomość do wysłania")
 async def airdrop_command(interaction: discord.Interaction, channel: discord.TextChannel, voice: discord.VoiceChannel, role: discord.Role, opis: str):
+    # Deferujemy interakcję, żeby uniknąć błędu 40060
+    await interaction.response.defer(ephemeral=True)
+
     embed = discord.Embed(
         title="🎁 AirDrop!",
         description=opis,
@@ -159,13 +163,13 @@ async def airdrop_command(interaction: discord.Interaction, channel: discord.Tex
     embed.add_field(name="Kanał głosowy:", value=f"🔊 {voice.mention}", inline=False)
     embed.add_field(name="Zapisani:", value="Brak uczestników", inline=False)
 
-    # Tworzymy widok z autorem i prawidłowym message_id
+    # Tworzymy widok z autorem
     view = AirdropView(0, opis, voice, interaction.user.display_name)
     sent_message = await channel.send(content=f"{role.mention}", embed=embed, view=view)
     view.message_id = sent_message.id  # ustawiamy prawidłowe ID
 
-    await interaction.response.send_message("✅ AirDrop utworzony!", ephemeral=True)
-
+    # Wysyłamy follow-up, a nie response.send_message
+    await interaction.followup.send("✅ AirDrop utworzony!")
 
 # --- Captures ---
 captures = {}
@@ -244,7 +248,6 @@ class CapturesView(ui.View):
             await interaction.response.send_message("Nikt jeszcze się nie zapisał!", ephemeral=True)
             return
         await interaction.response.send_message("Wybierz do 25 graczy z listy:", view=PickPlayersView(self.capture_id), ephemeral=True)
-
 
 # --- Uruchomienie Discord Bota w osobnym wątku ---
 def run_discord_bot():
