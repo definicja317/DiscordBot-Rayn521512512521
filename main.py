@@ -25,7 +25,7 @@ if not token:
 PICK_ROLE_ID = 1413424476770664499
 ZANCUDO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414194392214011974/image.png"
 CAYO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414204332747915274/image.png"
-LOGO_URL = "https://cdn.discordapp.com/attachments/.../twoje_logo.png"  # <- podmień na link do swojego logo
+LOGO_URL = "https://cdn.discordapp.com/icons/1206228465809100800/849c19ddef5481d01a3dfe4ccfaa8233.webp?size=1024"
 
 # --- Discord Client ---
 intents = discord.Intents.default()
