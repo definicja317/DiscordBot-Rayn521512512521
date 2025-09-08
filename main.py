@@ -35,18 +35,19 @@ tree = app_commands.CommandTree(client)
 
 # --- Klasy UI dla AirDrop ---
 class AirdropView(ui.View):
-    def __init__(self, message_id: int, description: str, voice_channel: discord.VoiceChannel):
+    def __init__(self, message_id: int, description: str, voice_channel: discord.VoiceChannel, author_name: str):
         super().__init__(timeout=None)
         self.message_id = message_id
         self.description = description
         self.voice_channel = voice_channel
         self.participants: list[int] = []
+        self.author_name = author_name  # kto wysłał ogłoszenie
 
     def make_embed(self, guild: discord.Guild):
         embed = discord.Embed(
             title="🎁 AirDrop!",
             description=self.description,
-            color=discord.Color(0xFFFFFF)  # biały
+            color=discord.Color(0xFFFFFF)
         )
 
         embed.set_thumbnail(url=LOGO_URL)
@@ -74,7 +75,8 @@ class AirdropView(ui.View):
         else:
             embed.add_field(name="Zapisani:", value="Brak uczestników", inline=False)
 
-        embed.set_footer(text=f"Start: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+        # Stopka z autorem zamiast daty
+        embed.set_footer(text=f"Wystawione przez {self.author_name}")
         return embed
 
     @ui.button(label="✅ Dołącz do AirDrop", style=discord.ButtonStyle.green)
@@ -157,9 +159,10 @@ async def airdrop_command(interaction: discord.Interaction, channel: discord.Tex
     embed.add_field(name="Kanał głosowy:", value=f"🔊 {voice.mention}", inline=False)
     embed.add_field(name="Zapisani:", value="Brak uczestników", inline=False)
 
-    sent_message = await channel.send(content=f"{role.mention}", embed=embed, view=AirdropView(0, opis, voice))
-    view = AirdropView(sent_message.id, opis, voice)
-    await sent_message.edit(view=view)
+    # Tworzymy widok z autorem i prawidłowym message_id
+    view = AirdropView(0, opis, voice, interaction.user.display_name)
+    sent_message = await channel.send(content=f"{role.mention}", embed=embed, view=view)
+    view.message_id = sent_message.id  # ustawiamy prawidłowe ID
 
     await interaction.response.send_message("✅ AirDrop utworzony!", ephemeral=True)
 
