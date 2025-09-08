@@ -25,6 +25,7 @@ if not token:
 PICK_ROLE_ID = 1413424476770664499
 ZANCUDO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414194392214011974/image.png"
 CAYO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414204332747915274/image.png"
+LOGO_URL = "https://cdn.discordapp.com/attachments/.../twoje_logo.png"  # <- podmień na link do swojego logo
 
 # --- Discord Client ---
 intents = discord.Intents.default()
@@ -45,8 +46,10 @@ class AirdropView(ui.View):
         embed = discord.Embed(
             title="🎁 AirDrop!",
             description=self.description,
-            color=discord.Color.blue()
+            color=discord.Color(0xFFFFFF)  # biały
         )
+
+        embed.set_thumbnail(url=LOGO_URL)
 
         if self.voice_channel:
             embed.add_field(
@@ -143,13 +146,18 @@ async def ping_cayo(interaction: discord.Interaction, role: discord.Role, channe
     await interaction.response.send_message("Ogłoszenie o ataku wysłane!", ephemeral=True)
 
 @tree.command(name="airdrop", description="Wysyła ogłoszenie o airdropie z możliwością zapisu.")
-@app_commands.describe(channel="Kanał, na który wysłać ogłoszenie", voice="Kanał głosowy", opis="Wiadomość do wysłania")
-async def airdrop_command(interaction: discord.Interaction, channel: discord.TextChannel, voice: discord.VoiceChannel, opis: str):
-    embed = discord.Embed(title="🎁 AirDrop!", description=opis, color=discord.Color.blue())
+@app_commands.describe(channel="Kanał, na który wysłać ogłoszenie", voice="Kanał głosowy", role="Rola do spingowania", opis="Wiadomość do wysłania")
+async def airdrop_command(interaction: discord.Interaction, channel: discord.TextChannel, voice: discord.VoiceChannel, role: discord.Role, opis: str):
+    embed = discord.Embed(
+        title="🎁 AirDrop!",
+        description=opis,
+        color=discord.Color(0xFFFFFF)
+    )
+    embed.set_thumbnail(url=LOGO_URL)
     embed.add_field(name="Kanał głosowy:", value=f"🔊 {voice.mention}", inline=False)
     embed.add_field(name="Zapisani:", value="Brak uczestników", inline=False)
 
-    sent_message = await channel.send(embed=embed, view=AirdropView(0, opis, voice))
+    sent_message = await channel.send(content=f"{role.mention}", embed=embed, view=AirdropView(0, opis, voice))
     view = AirdropView(sent_message.id, opis, voice)
     await sent_message.edit(view=view)
 
