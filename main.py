@@ -23,7 +23,7 @@ if not token:
 
 # --- Ustawienia ---
 PICK_ROLE_ID = 1413424476770664499
-STATUS_ADMINS = [1184620388425138183, 1007732573063098378]  # <<< wpisz swoje ID
+STATUS_ADMINS = [1184620388425138183, 1007732573063098378]
 ZANCUDO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414194392214011974/image.png"
 CAYO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414204332747915274/image.png"
 LOGO_URL = "https://cdn.discordapp.com/icons/1206228465809100800/849c19ddef5481d01a3dfe4ccfaa8233.webp?size=1024"
@@ -256,7 +256,7 @@ async def set_status(interaction: discord.Interaction, status: str, activity_typ
         if activity_type == "gra":
             activity = discord.Game(name=activity_name)
         elif activity_type == "stream":
-            url = stream_url if stream_url else "https://twitch.tv/streamer"
+            url = stream_url if stream_url else "https://twitch.tv/definicja_00000"
             activity = discord.Streaming(name=activity_name, url=url)
         elif activity_type == "słuchanie":
             activity = discord.Activity(type=discord.ActivityType.listening, name=activity_name)
