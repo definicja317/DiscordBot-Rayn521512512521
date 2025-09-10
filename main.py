@@ -23,7 +23,7 @@ if not token:
 
 # --- Ustawienia ---
 PICK_ROLE_ID = 1413424476770664499
-STATUS_ADMINS = [1184620388425138183, 1007732573063098378] # <<< wpisz swoje ID
+STATUS_ADMINS = [1184620388425138183, 1007732573063098378 ]  # <<< wpisz swoje ID
 ZANCUDO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414194392214011974/image.png"
 CAYO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414204332747915274/image.png"
 LOGO_URL = "https://cdn.discordapp.com/icons/1206228465809100800/849c19ddef5481d01a3dfe4ccfaa8233.webp?size=1024"
@@ -89,7 +89,6 @@ class AirdropView(ui.View):
         await interaction.message.edit(embed=self.make_embed(interaction.guild), view=self)
         await interaction.response.send_message("❌ Opuściłeś(aś).", ephemeral=True)
 
-
 # =====================
 #       CAPTURES
 # =====================
@@ -145,33 +144,32 @@ class CapturesView(ui.View):
         super().__init__(timeout=None)
         self.capture_id = capture_id
 
-    @ui.button(label="✅ Wpisz się", style=discord.ButtonStyle.green)
-    async def join_button(self, interaction: discord.Interaction, button: ui.Button):
-        if interaction.user not in captures.get(self.capture_id, {}).get("participants", []):
-            captures.setdefault(self.capture_id, {"participants": []})["participants"].append(interaction.user)
-            await interaction.response.send_message("Zostałeś(aś) zapisany(a)!", ephemeral=True)
+    @ui.button(label="✅ Zapisz się", style=discord.ButtonStyle.green, custom_id="join_capt")
+    async def join_button_callback(self, interaction: discord.Interaction, button: ui.Button):
+        if interaction.user.id not in captures.get(self.capture_id, {}).get("participants", []):
+            captures.setdefault(self.capture_id, {"participants": []})["participants"].append(interaction.user.id)
+            await interaction.response.send_message("✅ Zostałeś(aś) zapisany(a) na captures!", ephemeral=True)
         else:
-            await interaction.response.send_message("Już jesteś zapisany(a).", ephemeral=True)
+            await interaction.response.send_message("❌ Jesteś już zapisany(a)!", ephemeral=True)
 
-    @ui.button(label="❌ Wypisz się", style=discord.ButtonStyle.red)
-    async def leave_button(self, interaction: discord.Interaction, button: ui.Button):
-        if interaction.user in captures.get(self.capture_id, {}).get("participants", []):
-            captures[self.capture_id]["participants"].remove(interaction.user)
-            await interaction.response.send_message("Zostałeś(aś) wypisany(a).", ephemeral=True)
+    @ui.button(label="❌ Wypisz się", style=discord.ButtonStyle.red, custom_id="leave_capt")
+    async def leave_button_callback(self, interaction: discord.Interaction, button: ui.Button):
+        if interaction.user.id in captures.get(self.capture_id, {}).get("participants", []):
+            captures[self.capture_id]["participants"].remove(interaction.user.id)
+            await interaction.response.send_message("✅ Wypisałeś(aś) się z captures!", ephemeral=True)
         else:
-            await interaction.response.send_message("Nie jesteś zapisany(a).", ephemeral=True)
+            await interaction.response.send_message("❌ Nie jesteś zapisany(a)!", ephemeral=True)
 
-    @ui.button(label="🎯 Pickuj osoby", style=discord.ButtonStyle.blurple)
-    async def pick_button(self, interaction: discord.Interaction, button: ui.Button):
+    @ui.button(label="Pickuj osoby", style=discord.ButtonStyle.blurple, custom_id="pick_players")
+    async def pick_button_callback(self, interaction: discord.Interaction, button: ui.Button):
         if PICK_ROLE_ID not in [r.id for r in interaction.user.roles]:
-            await interaction.response.send_message("⛔ Brak uprawnień!", ephemeral=True)
+            await interaction.response.send_message("❌ Nie masz uprawnień do użycia tego przycisku.", ephemeral=True)
             return
         participants = captures.get(self.capture_id, {}).get("participants", [])
         if not participants:
-            await interaction.response.send_message("Nikt się nie zapisał!", ephemeral=True)
+            await interaction.response.send_message("❌ Nikt jeszcze się nie zapisał!", ephemeral=True)
             return
-        await interaction.response.send_message("Wybierz do 25 graczy:", view=PickPlayersView(self.capture_id), ephemeral=True)
-
+        await interaction.response.send_message("Wybierz do 25 graczy z listy:", view=PickPlayersView(self.capture_id), ephemeral=True)
 
 # =====================
 #       KOMENDY
@@ -233,25 +231,58 @@ async def list_all(interaction: discord.Interaction):
     embed = discord.Embed(title="📋 Lista wszystkich zapisanych", description=desc, color=discord.Color.blue())
     await interaction.followup.send(embed=embed, ephemeral=True)
 
-# Set status
+# =====================
+#      SET STATUS
+# =====================
 @tree.command(name="set-status", description="Zmienia status bota (tylko admini)")
-async def set_status(interaction: discord.Interaction, status: str, activity: str = None):
+@app_commands.describe(
+    status="Status bota: online/idle/dnd/invisible",
+    activity_type="Rodzaj aktywności: gra/stream/oglądanie/słuchanie (opcjonalne)",
+    activity_name="Nazwa aktywności (opcjonalnie)"
+)
+async def set_status(interaction: discord.Interaction, status: str, activity_type: str = None, activity_name: str = None):
     if interaction.user.id not in STATUS_ADMINS:
         await interaction.response.send_message("⛔ Brak uprawnień!", ephemeral=True)
         return
+
     status_map = {
         "online": discord.Status.online,
         "idle": discord.Status.idle,
         "dnd": discord.Status.dnd,
         "invisible": discord.Status.invisible,
     }
-    if status.lower() not in status_map:
-        await interaction.response.send_message("⚠️ Podaj: online/idle/dnd/invisible", ephemeral=True)
-        return
-    await client.change_presence(status=status_map[status.lower()],
-                                 activity=discord.Game(name=activity) if activity else None)
-    await interaction.response.send_message(f"✅ Status ustawiony na {status}", ephemeral=True)
 
+    activity_type_map = {
+        "gra": discord.ActivityType.playing,
+        "stream": discord.ActivityType.streaming,
+        "oglądanie": discord.ActivityType.watching,
+        "słuchanie": discord.ActivityType.listening
+    }
+
+    if status.lower() not in status_map:
+        await interaction.response.send_message("⚠️ Podaj poprawny status: online/idle/dnd/invisible", ephemeral=True)
+        return
+
+    activity = None
+    if activity_type:
+        if activity_type.lower() not in activity_type_map:
+            await interaction.response.send_message("⚠️ Niepoprawny typ aktywności: gra/stream/oglądanie/słuchanie", ephemeral=True)
+            return
+        if activity_name:
+            if activity_type.lower() == "stream":
+                activity = discord.Streaming(name=activity_name, url="https://twitch.tv/streamer")
+            else:
+                activity = discord.Activity(type=activity_type_map[activity_type.lower()], name=activity_name)
+        else:
+            activity = discord.Activity(type=activity_type_map[activity_type.lower()], name="")
+
+    await client.change_presence(status=status_map[status.lower()], activity=activity)
+
+    embed = discord.Embed(title="✅ Status bota zmieniony", color=discord.Color.green())
+    embed.add_field(name="Status", value=status.capitalize(), inline=False)
+    if activity_type:
+        embed.add_field(name="Aktywność", value=f"{activity_type.capitalize()} - {activity_name if activity_name else 'brak nazwy'}", inline=False)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # --- Start bota ---
 def run_discord_bot():
