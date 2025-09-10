@@ -23,7 +23,7 @@ if not token:
 
 # --- Ustawienia ---
 PICK_ROLE_ID = 1413424476770664499
-STATUS_ADMINS = [1184620388425138183, 1007732573063098378]
+STATUS_ADMINS = [1184620388425138183, 1007732573063098378]  # <<< wpisz swoje ID
 ZANCUDO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414194392214011974/image.png"
 CAYO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414204332747915274/image.png"
 LOGO_URL = "https://cdn.discordapp.com/icons/1206228465809100800/849c19ddef5481d01a3dfe4ccfaa8233.webp?size=1024"
@@ -184,7 +184,6 @@ async def create_capt(interaction: discord.Interaction, image_url: str = None):
         embed.set_image(url=image_url)
     sent = await interaction.channel.send(content="@everyone", embed=embed, view=CapturesView(0))
     captures[sent.id] = {"participants": []}
-    await sent.edit(view=CapturesView(sent.id))
     await interaction.followup.send("✅ Ogłoszenie o captures wysłane!", ephemeral=True)
 
 # AirDrop
