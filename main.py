@@ -14,7 +14,7 @@ app = Flask(__name__)
 def home():
     return "Bot działa!"
 
-# --- Wczytanie tokena ---
+# --- Token ---
 load_dotenv()
 token = os.getenv("DISCORD_BOT_TOKEN")
 if not token:
@@ -23,6 +23,7 @@ if not token:
 
 # --- Ustawienia ---
 PICK_ROLE_ID = 1413424476770664499
+STATUS_ADMINS = [123456789012345678]  # <<< wpisz swoje ID
 ZANCUDO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414194392214011974/image.png"
 CAYO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414204332747915274/image.png"
 LOGO_URL = "https://cdn.discordapp.com/icons/1206228465809100800/849c19ddef5481d01a3dfe4ccfaa8233.webp?size=1024"
@@ -33,7 +34,14 @@ intents.members = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-# --- Klasy UI dla AirDrop ---
+# --- Pamięć zapisów ---
+captures = {}   # {msg_id: {"participants": [members]}}
+airdrops = {}   # {msg_id: {"participants": [ids]}}
+events = {"zancudo": {}, "cayo": {}}  # {msg_id: {"participants": [ids]}}
+
+# =====================
+#       AIRDROP
+# =====================
 class AirdropView(ui.View):
     def __init__(self, message_id: int, description: str, voice_channel: discord.VoiceChannel, author_name: str):
         super().__init__(timeout=None)
@@ -41,24 +49,12 @@ class AirdropView(ui.View):
         self.description = description
         self.voice_channel = voice_channel
         self.participants: list[int] = []
-        self.author_name = author_name  # kto wysłał ogłoszenie
+        self.author_name = author_name
 
     def make_embed(self, guild: discord.Guild):
-        embed = discord.Embed(
-            title="🎁 AirDrop!",
-            description=self.description,
-            color=discord.Color(0xFFFFFF)
-        )
-
+        embed = discord.Embed(title="🎁 AirDrop!", description=self.description, color=discord.Color(0xFFFFFF))
         embed.set_thumbnail(url=LOGO_URL)
-
-        if self.voice_channel:
-            embed.add_field(
-                name="Kanał głosowy:",
-                value=f"🔊 {self.voice_channel.mention}",
-                inline=False
-            )
-
+        embed.add_field(name="Kanał głosowy:", value=f"🔊 {self.voice_channel.mention}", inline=False)
         if self.participants:
             lines = []
             for uid in self.participants:
@@ -67,113 +63,36 @@ class AirdropView(ui.View):
                     lines.append(f"- {member.mention} | **{member.display_name}**")
                 else:
                     lines.append(f"- <@{uid}>")
-            embed.add_field(
-                name=f"Zapisani ({len(self.participants)}):",
-                value="\n".join(lines),
-                inline=False
-            )
+            embed.add_field(name=f"Zapisani ({len(self.participants)}):", value="\n".join(lines), inline=False)
         else:
             embed.add_field(name="Zapisani:", value="Brak uczestników", inline=False)
-
-        # Stopka z autorem zamiast daty
         embed.set_footer(text=f"Wystawione przez {self.author_name}")
         return embed
 
-    @ui.button(label="✅ Dołącz do AirDrop", style=discord.ButtonStyle.green)
+    @ui.button(label="✅ Dołącz", style=discord.ButtonStyle.green)
     async def join(self, interaction: discord.Interaction, button: ui.Button):
         if interaction.user.id in self.participants:
             await interaction.response.send_message("Już jesteś zapisany(a).", ephemeral=True)
             return
         self.participants.append(interaction.user.id)
-        embed = self.make_embed(interaction.guild)
-        await interaction.message.edit(embed=embed, view=self)
-        await interaction.response.send_message("Dołączyłeś(aś) do AirDrop!", ephemeral=True)
+        airdrops[self.message_id]["participants"].append(interaction.user.id)
+        await interaction.message.edit(embed=self.make_embed(interaction.guild), view=self)
+        await interaction.response.send_message("✅ Dołączyłeś(aś)!", ephemeral=True)
 
-    @ui.button(label="❌ Opuść AirDrop", style=discord.ButtonStyle.red)
+    @ui.button(label="❌ Opuść", style=discord.ButtonStyle.red)
     async def leave(self, interaction: discord.Interaction, button: ui.Button):
         if interaction.user.id not in self.participants:
             await interaction.response.send_message("Nie jesteś zapisany(a).", ephemeral=True)
             return
         self.participants.remove(interaction.user.id)
-        embed = self.make_embed(interaction.guild)
-        await interaction.message.edit(embed=embed, view=self)
-        await interaction.response.send_message("Opuściłeś(aś) AirDrop.", ephemeral=True)
+        airdrops[self.message_id]["participants"].remove(interaction.user.id)
+        await interaction.message.edit(embed=self.make_embed(interaction.guild), view=self)
+        await interaction.response.send_message("❌ Opuściłeś(aś).", ephemeral=True)
 
 
-# --- Eventy i komendy ---
-@client.event
-async def on_ready():
-    await tree.sync()
-    print(f"✅ Zalogowano jako {client.user}")
-
-@tree.command(name="create-capt", description="Tworzy ogłoszenie o captures.")
-@app_commands.describe(image_url="Link do obrazka dla embedu (opcjonalnie)")
-async def create_capt(interaction: discord.Interaction, image_url: str = None):
-    embed = discord.Embed(
-        title="CAPTURES!",
-        description="Aby wpisać się na captures kliknij w przycisk poniżej!",
-        color=discord.Color(0xFFFFFF)
-    )
-    if image_url:
-        embed.set_image(url=image_url)
-
-    sent_msg = await interaction.channel.send(content="@everyone", embed=embed, view=CapturesView(0))
-    captures[sent_msg.id] = {"participants": []}
-
-    await sent_msg.edit(view=CapturesView(sent_msg.id))
-    await interaction.response.send_message("Ogłoszenie o captures zostało wysłane.", ephemeral=True)
-
-@tree.command(name="ping-zancudo", description="Wysyła ogłoszenie o ataku na Fort Zancudo.")
-@app_commands.describe(role="Rola do spingowania", channel="Kanał, na którym się zbieracie")
-async def ping_zancudo(interaction: discord.Interaction, role: discord.Role, channel: discord.VoiceChannel):
-    embed = discord.Embed(
-        title="Atak na FORT ZANCUDO!",
-        description=f"Zapraszam wszystkich na {channel.mention}, atakujemy teren bazy wojskowej!",
-        color=discord.Color(0xFFFFFF)
-    )
-    embed.set_image(url=ZANCUDO_IMAGE_URL)
-    await interaction.channel.send(content=f"@everyone {role.mention}", embed=embed)
-    await interaction.response.send_message("Ogłoszenie o ataku wysłane!", ephemeral=True)
-
-@tree.command(name="ping-cayo", description="Wysyła ogłoszenie o ataku na Cayo Perico.")
-@app_commands.describe(role="Rola do spingowania", channel="Kanał, na którym się zbieracie")
-async def ping_cayo(interaction: discord.Interaction, role: discord.Role, channel: discord.VoiceChannel):
-    embed = discord.Embed(
-        title="Atak na CAYO PERICO!",
-        description=f"Zapraszam wszystkich na {channel.mention} - atakujemy wyspę Cayo Perico!",
-        color=discord.Color(0xFFFFFF)
-    )
-    embed.set_image(url=CAYO_IMAGE_URL)
-    await interaction.channel.send(content=f"@everyone {role.mention}", embed=embed)
-    await interaction.response.send_message("Ogłoszenie o ataku wysłane!", ephemeral=True)
-
-# --- POPRAWIONA KOMENDA AIRDROP ---
-@tree.command(name="airdrop", description="Wysyła ogłoszenie o airdropie z możliwością zapisu.")
-@app_commands.describe(channel="Kanał, na który wysłać ogłoszenie", voice="Kanał głosowy", role="Rola do spingowania", opis="Wiadomość do wysłania")
-async def airdrop_command(interaction: discord.Interaction, channel: discord.TextChannel, voice: discord.VoiceChannel, role: discord.Role, opis: str):
-    # Deferujemy interakcję, żeby uniknąć błędu 40060
-    await interaction.response.defer(ephemeral=True)
-
-    embed = discord.Embed(
-        title="🎁 AirDrop!",
-        description=opis,
-        color=discord.Color(0xFFFFFF)
-    )
-    embed.set_thumbnail(url=LOGO_URL)
-    embed.add_field(name="Kanał głosowy:", value=f"🔊 {voice.mention}", inline=False)
-    embed.add_field(name="Zapisani:", value="Brak uczestników", inline=False)
-
-    # Tworzymy widok z autorem
-    view = AirdropView(0, opis, voice, interaction.user.display_name)
-    sent_message = await channel.send(content=f"{role.mention}", embed=embed, view=view)
-    view.message_id = sent_message.id  # ustawiamy prawidłowe ID
-
-    # Wysyłamy follow-up, a nie response.send_message
-    await interaction.followup.send("✅ AirDrop utworzony!")
-
-# --- Captures ---
-captures = {}
-
+# =====================
+#       CAPTURES
+# =====================
 class PlayerSelectMenu(ui.Select):
     def __init__(self, capture_id):
         self.capture_id = capture_id
@@ -203,16 +122,14 @@ class PickPlayersView(ui.View):
         if len(selected_values) > 25:
             await interaction.response.send_message("Możesz wybrać maksymalnie 25 osób!", ephemeral=True)
             return
-
         selected_members = [
             interaction.guild.get_member(int(mid))
             for mid in selected_values if interaction.guild.get_member(int(mid))
         ]
         total_participants = len(captures.get(self.capture_id, {}).get("participants", []))
-
         final_embed = discord.Embed(
             title="Lista osób na captures!",
-            description=f"Osoby które zostały wybrane na capt spośród {total_participants} osób to:",
+            description=f"Wybrano {len(selected_members)}/{total_participants} osób:",
             color=discord.Color(0xFFFFFF)
         )
         final_embed.add_field(
@@ -220,9 +137,7 @@ class PickPlayersView(ui.View):
             value="\n".join(f"{i+1}. {m.mention} | **{m.display_name}**" for i, m in enumerate(selected_members)),
             inline=False
         )
-        final_embed.set_footer(
-            text=f"Wystawione przez {interaction.user.display_name} • {discord.utils.utcnow().strftime('%d.%m.%Y %H:%M')}"
-        )
+        final_embed.set_footer(text=f"Wystawione przez {interaction.user.display_name} • {discord.utils.utcnow().strftime('%d.%m.%Y %H:%M')}")
         await interaction.response.send_message(embed=final_embed)
 
 class CapturesView(ui.View):
@@ -230,32 +145,120 @@ class CapturesView(ui.View):
         super().__init__(timeout=None)
         self.capture_id = capture_id
 
-    @ui.button(label="Zapisz się na capt", style=discord.ButtonStyle.green, custom_id="join_capt")
-    async def join_button_callback(self, interaction: discord.Interaction, button: ui.Button):
+    @ui.button(label="✅ Wpisz się", style=discord.ButtonStyle.green)
+    async def join_button(self, interaction: discord.Interaction, button: ui.Button):
         if interaction.user not in captures.get(self.capture_id, {}).get("participants", []):
             captures.setdefault(self.capture_id, {"participants": []})["participants"].append(interaction.user)
-            await interaction.response.send_message("Zostałeś(aś) zapisany(a) na captures!", ephemeral=True)
+            await interaction.response.send_message("Zostałeś(aś) zapisany(a)!", ephemeral=True)
         else:
-            await interaction.response.send_message("Jesteś już zapisany(a) na captures!", ephemeral=True)
+            await interaction.response.send_message("Już jesteś zapisany(a).", ephemeral=True)
 
-    @ui.button(label="Pickuj osoby", style=discord.ButtonStyle.blurple, custom_id="pick_players")
-    async def pick_button_callback(self, interaction: discord.Interaction, button: ui.Button):
+    @ui.button(label="❌ Wypisz się", style=discord.ButtonStyle.red)
+    async def leave_button(self, interaction: discord.Interaction, button: ui.Button):
+        if interaction.user in captures.get(self.capture_id, {}).get("participants", []):
+            captures[self.capture_id]["participants"].remove(interaction.user)
+            await interaction.response.send_message("Zostałeś(aś) wypisany(a).", ephemeral=True)
+        else:
+            await interaction.response.send_message("Nie jesteś zapisany(a).", ephemeral=True)
+
+    @ui.button(label="🎯 Pickuj osoby", style=discord.ButtonStyle.blurple)
+    async def pick_button(self, interaction: discord.Interaction, button: ui.Button):
         if PICK_ROLE_ID not in [r.id for r in interaction.user.roles]:
-            await interaction.response.send_message("Nie masz uprawnień do użycia tego przycisku.", ephemeral=True)
+            await interaction.response.send_message("⛔ Brak uprawnień!", ephemeral=True)
             return
         participants = captures.get(self.capture_id, {}).get("participants", [])
         if not participants:
-            await interaction.response.send_message("Nikt jeszcze się nie zapisał!", ephemeral=True)
+            await interaction.response.send_message("Nikt się nie zapisał!", ephemeral=True)
             return
-        await interaction.response.send_message("Wybierz do 25 graczy z listy:", view=PickPlayersView(self.capture_id), ephemeral=True)
+        await interaction.response.send_message("Wybierz do 25 graczy:", view=PickPlayersView(self.capture_id), ephemeral=True)
 
-# --- Uruchomienie Discord Bota w osobnym wątku ---
+
+# =====================
+#       KOMENDY
+# =====================
+@client.event
+async def on_ready():
+    await tree.sync()
+    print(f"✅ Zalogowano jako {client.user}")
+
+# Captures
+@tree.command(name="create-capt", description="Tworzy ogłoszenie o captures.")
+async def create_capt(interaction: discord.Interaction):
+    embed = discord.Embed(title="CAPTURES!", description="Kliknij przycisk, aby się zapisać!", color=discord.Color(0xFFFFFF))
+    sent = await interaction.channel.send(content="@everyone", embed=embed, view=CapturesView(0))
+    captures[sent.id] = {"participants": []}
+    await sent.edit(view=CapturesView(sent.id))
+    await interaction.response.send_message("Ogłoszenie o captures wysłane!", ephemeral=True)
+
+# AirDrop
+@tree.command(name="airdrop", description="Tworzy ogłoszenie o AirDropie")
+async def airdrop_command(interaction: discord.Interaction, channel: discord.TextChannel, voice: discord.VoiceChannel, role: discord.Role, opis: str):
+    await interaction.response.defer(ephemeral=True)
+    view = AirdropView(0, opis, voice, interaction.user.display_name)
+    embed = view.make_embed(interaction.guild)
+    sent = await channel.send(content=f"{role.mention}", embed=embed, view=view)
+    view.message_id = sent.id
+    airdrops[sent.id] = {"participants": []}
+    await interaction.followup.send("✅ AirDrop utworzony!", ephemeral=True)
+
+# Eventy Zancudo / Cayo
+@tree.command(name="ping-zancudo", description="Wysyła ogłoszenie o ataku na Fort Zancudo.")
+async def ping_zancudo(interaction: discord.Interaction, role: discord.Role, channel: discord.VoiceChannel):
+    embed = discord.Embed(title="Atak na FORT ZANCUDO!", description=f"Zapraszamy na {channel.mention}!", color=discord.Color(0xFF0000))
+    embed.set_image(url=ZANCUDO_IMAGE_URL)
+    await interaction.channel.send(content=f"{role.mention}", embed=embed)
+    await interaction.response.send_message("✅ Ogłoszenie o ataku wysłane!", ephemeral=True)
+
+@tree.command(name="ping-cayo", description="Wysyła ogłoszenie o ataku na Cayo Perico.")
+async def ping_cayo(interaction: discord.Interaction, role: discord.Role, channel: discord.VoiceChannel):
+    embed = discord.Embed(title="Atak na CAYO PERICO!", description=f"Zapraszamy na {channel.mention}!", color=discord.Color(0xFFAA00))
+    embed.set_image(url=CAYO_IMAGE_URL)
+    await interaction.channel.send(content=f"{role.mention}", embed=embed)
+    await interaction.response.send_message("✅ Ogłoszenie o ataku wysłane!", ephemeral=True)
+
+# Lista wszystkich zapisanych
+@tree.command(name="list-all", description="Pokazuje listę wszystkich zapisanych")
+async def list_all(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    desc = ""
+    for mid, data in airdrops.items():
+        desc += f"\n**AirDrop (msg {mid})**: {len(data['participants'])} osób"
+    for etype, msgs in events.items():
+        for mid, data in msgs.items():
+            desc += f"\n**{etype.capitalize()} (msg {mid})**: {len(data['participants'])} osób"
+    for mid, data in captures.items():
+        desc += f"\n**Captures (msg {mid})**: {len(data['participants'])} osób"
+    if not desc:
+        desc = "Brak aktywnych zapisów."
+    embed = discord.Embed(title="📋 Lista wszystkich zapisanych", description=desc, color=discord.Color.blue())
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+# Set status
+@tree.command(name="set-status", description="Zmienia status bota (tylko admini)")
+async def set_status(interaction: discord.Interaction, status: str, activity: str = None):
+    if interaction.user.id not in STATUS_ADMINS:
+        await interaction.response.send_message("⛔ Brak uprawnień!", ephemeral=True)
+        return
+    status_map = {
+        "online": discord.Status.online,
+        "idle": discord.Status.idle,
+        "dnd": discord.Status.dnd,
+        "invisible": discord.Status.invisible,
+    }
+    if status.lower() not in status_map:
+        await interaction.response.send_message("⚠️ Podaj: online/idle/dnd/invisible", ephemeral=True)
+        return
+    await client.change_presence(status=status_map[status.lower()],
+                                 activity=discord.Game(name=activity) if activity else None)
+    await interaction.response.send_message(f"✅ Status ustawiony na {status}", ephemeral=True)
+
+
+# --- Start bota ---
 def run_discord_bot():
     client.run(token)
 
 threading.Thread(target=run_discord_bot).start()
 
-# --- Uruchomienie Flask ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
