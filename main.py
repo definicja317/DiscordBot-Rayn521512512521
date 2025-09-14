@@ -100,6 +100,9 @@ class PlayerSelectMenu(ui.Select):
             discord.SelectOption(label=member.display_name, value=str(member.id))
             for member in captures.get(self.capture_id, {}).get("participants", [])
         ]
+        # jeśli brak uczestników, dodaj placeholder
+        if not options:
+            options = [discord.SelectOption(label="Brak uczestników", value="none")]
         super().__init__(
             placeholder="Wybierz do 25 graczy",
             max_values=min(25, len(options)),
@@ -181,14 +184,17 @@ async def on_ready():
     await tree.sync()
     print(f"✅ Zalogowano jako {client.user}")
 
-# Captures
+# Captures z możliwością image_url
 @tree.command(name="create-capt", description="Tworzy ogłoszenie o captures.")
-async def create_capt(interaction: discord.Interaction):
+@app_commands.describe(image_url="Link do obrazka w embedzie (opcjonalnie)")
+async def create_capt(interaction: discord.Interaction, image_url: str = None):
     embed = discord.Embed(
         title="CAPTURES!",
         description="Kliknij przycisk, aby się zapisać!",
         color=discord.Color(0xFFFFFF)
     )
+    if image_url:
+        embed.set_image(url=image_url)  # ustawienie obrazka jeśli podany
 
     # najpierw wyślij wiadomość
     sent = await interaction.channel.send(content="@everyone", embed=embed)
