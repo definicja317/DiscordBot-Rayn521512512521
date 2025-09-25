@@ -23,8 +23,9 @@ if not token:
     sys.exit(1)
 
 # --- Ustawienia ---
-PICK_ROLE_ID = 1413424476770664499 # Zmień na faktyczne ID
-STATUS_ADMINS = [1184620388425138183, 1409225386998501480, 1007732573063098378, 364869132526551050] # Zmień na faktyczne ID
+# WAŻNE: Wprowadź swoje faktyczne ID ról/użytkowników.
+PICK_ROLE_ID = 1413424476770664499 # ID Roli, która może 'pickować' graczy
+STATUS_ADMINS = [1184620388425138183, 1409225386998501480, 1007732573063098378, 364869132526551050] # ID Użytkowników-Adminów
 ADMIN_ROLES = STATUS_ADMINS 
 ZANCUDO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414194392214011974/image.png"
 CAYO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414204332747915274/image.png"
@@ -37,6 +38,7 @@ client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
 # --- Pamięć zapisów ---
+# WAŻNE: W przypadku restartu bota te dane zostaną wyczyszczone!
 captures = {}   
 airdrops = {}   
 events = {"zancudo": {}, "cayo": {}} 
@@ -90,7 +92,7 @@ class AirdropView(ui.View):
         self.author_name = author_name
 
     def make_embed(self, guild: discord.Guild):
-        # POPRAWKA KOLORU: używamy 0xFFFFFF (biały)
+        # POPRAWKA KOLORU: używamy 0xFFFFFF (biały) zamiast .white
         embed = discord.Embed(title="🎁 AirDrop!", description=self.description, color=discord.Color(0xFFFFFF))
         embed.set_thumbnail(url=LOGO_URL)
         embed.add_field(name="Kanał głosowy:", value=f"🔊 {self.voice_channel.mention}", inline=False)
@@ -110,23 +112,30 @@ class AirdropView(ui.View):
 
     @ui.button(label="✅ Dołącz", style=discord.ButtonStyle.green)
     async def join(self, interaction: discord.Interaction, button: ui.Button):
+        # KLUCZOWA POPRAWKA: defer przy edycji głównej wiadomości, aby uniknąć 10062
+        await interaction.response.defer() 
+        
         if interaction.user.id in self.participants:
-            await interaction.response.send_message("Już jesteś zapisany(a).", ephemeral=True)
+            await interaction.followup.send("Już jesteś zapisany(a).", ephemeral=True)
             return
         self.participants.append(interaction.user.id)
         airdrops[self.message_id]["participants"].append(interaction.user.id)
+        
         await interaction.message.edit(embed=self.make_embed(interaction.guild), view=self)
-        await interaction.response.send_message("✅ Dołączyłeś(aś)!", ephemeral=True)
+        await interaction.followup.send("✅ Dołączyłeś(aś)!", ephemeral=True)
 
     @ui.button(label="❌ Opuść", style=discord.ButtonStyle.red)
     async def leave(self, interaction: discord.Interaction, button: ui.Button):
+        # KLUCZOWA POPRAWKA: defer przy edycji głównej wiadomości, aby uniknąć 10062
+        await interaction.response.defer() 
+        
         if interaction.user.id not in self.participants:
-            await interaction.response.send_message("Nie jesteś zapisany(a).", ephemeral=True)
+            await interaction.followup.send("Nie jesteś zapisany(a).", ephemeral=True)
             return
         self.participants.remove(interaction.user.id)
         airdrops[self.message_id]["participants"].remove(interaction.user.id)
         await interaction.message.edit(embed=self.make_embed(interaction.guild), view=self)
-        await interaction.response.send_message("❌ Opuściłeś(aś).", ephemeral=True)
+        await interaction.followup.send("❌ Opuściłeś(aś).", ephemeral=True)
 
 class PlayerSelectMenu(ui.Select):
     def __init__(self, capture_id: int, guild: discord.Guild):
@@ -147,7 +156,8 @@ class PlayerSelectMenu(ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        # Ta interakcja nie musi nic robić, tylko buforować wybór, więc defer wystarczy
+        await interaction.response.defer() 
 
 class PickPlayersView(ui.View):
     def __init__(self, capture_id: int):
@@ -156,16 +166,20 @@ class PickPlayersView(ui.View):
 
     @ui.button(label="Potwierdź wybór", style=discord.ButtonStyle.green)
     async def confirm_pick(self, interaction: discord.Interaction, button: ui.Button):
+        # Defer, bo generowanie i wysłanie embeda zajmuje czas
+        await interaction.response.defer(ephemeral=True)
+        
+        # Iteracja po children, aby znaleźć SelectMenu, bez CustomID jest to bezpieczniejsze
         select_menu = next((item for item in self.children if isinstance(item, ui.Select)), None)
         
         if not select_menu:
-             await interaction.response.send_message("Błąd: Nie znaleziono menu wyboru. Spróbuj ponownie.", ephemeral=True)
+             await interaction.followup.send("Błąd: Nie znaleziono menu wyboru. Spróbuj ponownie.", ephemeral=True)
              return
              
         selected_values = select_menu.values
         
         if not selected_values:
-            await interaction.response.send_message("Nie wybrano żadnych osób!", ephemeral=True)
+            await interaction.followup.send("Nie wybrano żadnych osób!", ephemeral=True)
             return
 
         selected_members = [
@@ -173,6 +187,7 @@ class PickPlayersView(ui.View):
             for mid in selected_values if interaction.guild.get_member(int(mid))
         ]
         total_participants = len(captures.get(self.capture_id, {}).get("participants", []))
+        
         # POPRAWKA KOLORU: używamy 0xFFFFFF (biały)
         final_embed = discord.Embed(
             title="Lista osób na captures!",
@@ -185,7 +200,7 @@ class PickPlayersView(ui.View):
             inline=False
         )
         final_embed.set_footer(text=f"Wystawione przez {interaction.user.display_name} • {discord.utils.utcnow().strftime('%d.%m.%Y %H:%M')}")
-        await interaction.response.send_message(embed=final_embed)
+        await interaction.followup.send(embed=final_embed)
 
 class CapturesView(ui.View):
     def __init__(self, capture_id: int, author_name: str): 
@@ -218,51 +233,72 @@ class CapturesView(ui.View):
     @ui.button(label="✅ Wpisz się", style=discord.ButtonStyle.green)
     async def join_button(self, interaction: discord.Interaction, button: ui.Button):
         user_id = interaction.user.id
-        if user_id not in captures.get(self.capture_id, {}).get("participants", []):
+        participants = captures.get(self.capture_id, {}).get("participants", [])
+        
+        if user_id not in participants:
+            # KLUCZOWA POPRAWKA: defer przy edycji głównej wiadomości, aby uniknąć 10062
+            await interaction.response.defer() 
+            
             captures.setdefault(self.capture_id, {"participants": []})["participants"].append(user_id)
+            
             data = captures.get(self.capture_id)
             if data and data.get("message"):
-                await data["message"].edit(embed=self.make_embed(interaction.guild), view=self)
-            await interaction.response.send_message("Zostałeś(aś) zapisany(a)!", ephemeral=True)
+                await interaction.message.edit(embed=self.make_embed(interaction.guild), view=self)
+                await interaction.followup.send("Zostałeś(aś) zapisany(a)!", ephemeral=True)
+            else:
+                await interaction.followup.send("Zostałeś(aś) zapisany(a)!", ephemeral=True)
         else:
             await interaction.response.send_message("Już jesteś zapisany(a).", ephemeral=True)
 
     @ui.button(label="❌ Wypisz się", style=discord.ButtonStyle.red)
     async def leave_button(self, interaction: discord.Interaction, button: ui.Button):
         user_id = interaction.user.id
-        if user_id in captures.get(self.capture_id, {}).get("participants", []):
+        participants = captures.get(self.capture_id, {}).get("participants", [])
+        
+        if user_id in participants:
+            # KLUCZOWA POPRAWKA: defer przy edycji głównej wiadomości, aby uniknąć 10062
+            await interaction.response.defer() 
+            
             captures[self.capture_id]["participants"].remove(user_id)
+            
             data = captures.get(self.capture_id)
             if data and data.get("message"):
-                await data["message"].edit(embed=self.make_embed(interaction.guild), view=self)
-            await interaction.response.send_message("Zostałeś(aś) wypisany(a).", ephemeral=True)
+                await interaction.message.edit(embed=self.make_embed(interaction.guild), view=self)
+                await interaction.followup.send("Zostałeś(aś) wypisany(a).", ephemeral=True)
+            else:
+                 await interaction.followup.send("Zostałeś(aś) wypisany(a).", ephemeral=True)
         else:
             await interaction.response.send_message("Nie jesteś zapisany(a).", ephemeral=True)
 
     @ui.button(label="🎯 Pickuj osoby", style=discord.ButtonStyle.blurple)
     async def pick_button(self, interaction: discord.Interaction, button: ui.Button):
+        # Defer, bo wysłanie nowego view zajmuje czas
+        await interaction.response.defer(ephemeral=True)
+        
         if PICK_ROLE_ID not in [r.id for r in interaction.user.roles]:
-            await interaction.response.send_message("⛔ Brak uprawnień!", ephemeral=True)
+            await interaction.followup.send("⛔ Brak uprawnień!", ephemeral=True)
             return
+            
         participants = captures.get(self.capture_id, {}).get("participants", [])
         if not participants:
-            await interaction.response.send_message("Nikt się nie zapisał!", ephemeral=True)
+            await interaction.followup.send("Nikt się nie zapisał!", ephemeral=True)
             return
+            
         pick_view = PickPlayersView(self.capture_id)
         pick_view.add_item(PlayerSelectMenu(self.capture_id, interaction.guild))
-        await interaction.response.send_message("Wybierz do 25 graczy:", view=pick_view, ephemeral=True)
+        
+        await interaction.followup.send("Wybierz do 25 graczy:", view=pick_view, ephemeral=True)
+
 
 # =======================================================
 # <<< FUNKCJE DLA SQUADÓW (Z POPRAWKAMI) >>>
 # =======================================================
 
 def create_squad_embed(guild: discord.Guild, author_name: str, member_ids: list[int], title: str = "Main Squad"):
-    """Tworzy embed dla Squadu na podstawie listy ID."""
+    """Tworzy embed dla Squadu na podstawie listy ID. POPRAWIONO KOLOR."""
     
     member_lines = []
     
-    # Maksymalna liczba członków do wyświetlenia (Discord ma limit 1024 znaki na pole)
-    # Wyświetlamy max 25, jak w UserSelect.
     for i, uid in enumerate(member_ids):
         member = guild.get_member(uid)
         if member:
@@ -273,7 +309,7 @@ def create_squad_embed(guild: discord.Guild, author_name: str, member_ids: list[
     members_list_str = "\n".join(member_lines) if member_lines else "Brak członków składu."
     count = len(member_ids)
         
-    # POPRAWKA KOLORU: używamy 0xFFFFFF (biały)
+    # POPRAWKA KOLORU: używamy 0xFFFFFF (biały) - rozwiązuje błąd Colour.white
     embed = discord.Embed(
         title=title, 
         description=f"Oto aktualny skład:\n\n{members_list_str}", 
@@ -288,12 +324,13 @@ def create_squad_embed(guild: discord.Guild, author_name: str, member_ids: list[
 
 
 class EditSquadView(ui.View):
-    """Widok zawierający menu wyboru użytkowników i przycisk Potwierdź edycję. Zastępuje stary modal."""
+    """Widok zawierający menu wyboru użytkowników i przycisk Potwierdź edycję. **Zastępuje Modal**."""
     def __init__(self, message_id: int):
-        super().__init__(timeout=180)
+        # Timeout 3 minuty
+        super().__init__(timeout=180) 
         self.message_id = message_id
         
-        # UserSelect (wybieracz użytkowników)
+        # UserSelect (wybieracz użytkowników) - max 25
         self.add_item(ui.UserSelect(
             placeholder="Wybierz członków składu (max 25)",
             max_values=25, 
@@ -302,17 +339,15 @@ class EditSquadView(ui.View):
 
     @ui.button(label="✅ Potwierdź edycję", style=discord.ButtonStyle.green)
     async def confirm_edit(self, interaction: discord.Interaction, button: ui.Button):
-        # KLUCZOWA POPRAWKA: Odroczenie interakcji!
+        # KLUCZOWA POPRAWKA: Odroczenie interakcji, ponieważ edytujemy główną wiadomość!
         await interaction.response.defer(ephemeral=True)
 
-        # Pobieramy wybrany UserSelect
+        # Pobieramy ID wybranych użytkowników z UserSelect
         select_menu = next((item for item in self.children if item.custom_id == "squad_member_picker"), None)
-        
-        # Jeśli UserSelect istnieje i ma wartości, to są to ID użytkowników (str)
-        # UWAGA: UserSelect zwraca ID w `select_menu.values` (str) i obiekty w `interaction.data.resolved['users']`
         selected_ids = []
         if select_menu and select_menu.values:
-            selected_ids = [int(uid) for uid in select_menu.values]
+            # UserSelect zwraca obiekty User/Member, a my potrzebujemy ID
+            selected_ids = [user.id for user in select_menu.values]
         
         squad_data = squads.get(self.message_id)
 
@@ -334,9 +369,11 @@ class EditSquadView(ui.View):
         
         # Odświeżamy wiadomość
         if message and hasattr(message, 'edit'):
+            # Wysyłamy pierwotny widok z powrotem
             new_squad_view = SquadView(self.message_id, squad_data.get("role_id"))
             
             role_id = squad_data.get("role_id")
+            # Poprawka: używamy <@&ID> dla roli
             content = f"<@&{role_id}> **Zaktualizowano Skład!**" if role_id else ""
             
             await message.edit(content=content, embed=new_embed, view=new_squad_view)
@@ -344,7 +381,7 @@ class EditSquadView(ui.View):
             # Odpowiedź po pomyślnej edycji
             await interaction.followup.send(content="✅ Skład został pomyślnie zaktualizowany! Wróć do głównej wiadomości składu.", ephemeral=True)
         else:
-            await interaction.followup.send(content="Błąd: Nie można odświeżyć wiadomości składu.", ephemeral=True)
+            await interaction.followup.send(content="Błąd: Nie można odświeżyć wiadomości składu. Być może bot został zrestartowany.", ephemeral=True)
 
 
 class SquadView(ui.View):
@@ -356,8 +393,7 @@ class SquadView(ui.View):
 
     @ui.button(label="Zarządzaj składem (ADMIN)", style=discord.ButtonStyle.blurple)
     async def manage_squad_button(self, interaction: discord.Interaction, button: ui.Button):
-        # KLUCZOWA POPRAWKA: Odroczenie interakcji! Zapobiega błędom 404/10062.
-        # Jest to konieczne, ponieważ wysłanie nowego View/Wiadomości zajmuje czas.
+        # KLUCZOWA POPRAWKA: Odroczenie interakcji! Zapobiega błędom 404/10062 i 400 Bad Request.
         await interaction.response.defer(ephemeral=True) 
 
         if interaction.user.id not in ADMIN_ROLES:
@@ -369,14 +405,42 @@ class SquadView(ui.View):
             await interaction.followup.send("Błąd: Nie znaleziono danych tego składu.", ephemeral=True)
             return
             
+        # Zastępujemy Modala widokiem z UserSelect
         edit_view = EditSquadView(self.message_id)
-        
-        # Zamiast Modala wysyłamy teraz EditSquadView z UserSelect
+            
         await interaction.followup.send(
             "Wybierz listę członków składu (użyj menu rozwijanego, max 25 osób). Po wybraniu naciśnij 'Potwierdź edycję':", 
             view=edit_view, 
             ephemeral=True
         )
+        
+    # POPRAWKA: Przycisk Dołącz zaimplementowany poprawnie
+    @ui.button(label="Dołącz", style=discord.ButtonStyle.green)
+    async def join(self, interaction: discord.Interaction, button: ui.Button):
+        # KLUCZOWA POPRAWKA: defer przy edycji głównej wiadomości
+        await interaction.response.defer() 
+        
+        squad = squads.get(self.message_id)
+        if not squad:
+            await interaction.followup.send("❌ Ten skład już nie istnieje.", ephemeral=True)
+            return
+
+        user_id = interaction.user.id
+        if user_id not in squad["member_ids"]:
+            squad["member_ids"].append(user_id)
+            
+            embed = create_squad_embed(
+                interaction.guild, 
+                squad["author_name"], 
+                squad["member_ids"], 
+                squad["message"].embeds[0].title
+            )
+            
+            await squad["message"].edit(embed=embed, view=self) 
+            
+            await interaction.followup.send("✅ Dołączyłeś do składu!", ephemeral=True)
+        else:
+            await interaction.followup.send("⚠️ Już jesteś w składzie!", ephemeral=True)
 
 # =======================================================
 # <<< KONIEC FUNKCJI DLA SQUADÓW >>>
@@ -393,7 +457,11 @@ async def on_ready():
         print(f"Próba przywrócenia {len(squads)} widoków Squad.")
         for msg_id, data in squads.items():
              try:
-                 client.add_view(SquadView(msg_id, data["role_id"]))
+                 # Ważne: musimy ustawić message obiekt, aby móc edytować
+                 channel = client.get_channel(data["channel_id"])
+                 if channel:
+                     data["message"] = await channel.fetch_message(msg_id)
+                     client.add_view(SquadView(msg_id, data["role_id"]))
              except Exception as e:
                  print(f"Błąd przy przywracaniu widoku Squad {msg_id}: {e}")
                  
@@ -435,12 +503,14 @@ async def create_squad(interaction: discord.Interaction, rola: discord.Role, tyt
     view.message_id = sent.id
     await sent.edit(view=view) 
     
+    # Odpowiedź w kanale follow up
     await interaction.followup.send(f"✅ Ogłoszenie o składzie '{tytul}' dla roli {rola.mention} wysłane!", ephemeral=True)
 
 
 # Captures
 @tree.command(name="create-capt", description="Tworzy ogłoszenie o captures.")
 async def create_capt(interaction: discord.Interaction):
+    # KLUCZOWA POPRAWKA: Defer
     await interaction.response.defer(ephemeral=True) 
     
     author_name = interaction.user.display_name
@@ -459,6 +529,7 @@ async def create_capt(interaction: discord.Interaction):
 # AirDrop
 @tree.command(name="airdrop", description="Tworzy ogłoszenie o AirDropie")
 async def airdrop_command(interaction: discord.Interaction, channel: discord.TextChannel, voice: discord.VoiceChannel, role: discord.Role, opis: str):
+    # KLUCZOWA POPRAWKA: Defer
     await interaction.response.defer(ephemeral=True)
     view = AirdropView(0, opis, voice, interaction.user.display_name)
     embed = view.make_embed(interaction.guild)
@@ -477,6 +548,7 @@ async def airdrop_command(interaction: discord.Interaction, channel: discord.Tex
 # Eventy Zancudo / Cayo
 @tree.command(name="ping-zancudo", description="Wysyła ogłoszenie o ataku na Fort Zancudo.")
 async def ping_zancudo(interaction: discord.Interaction, role: discord.Role, channel: discord.VoiceChannel):
+    # KLUCZOWA POPRAWKA: Defer
     await interaction.response.defer(ephemeral=True)
     embed = discord.Embed(title="Atak na FORT ZANCUDO!", description=f"Zapraszamy na {channel.mention}!", color=discord.Color(0xFF0000))
     embed.set_image(url=ZANCUDO_IMAGE_URL)
@@ -487,6 +559,7 @@ async def ping_zancudo(interaction: discord.Interaction, role: discord.Role, cha
 
 @tree.command(name="ping-cayo", description="Wysyła ogłoszenie o ataku na Cayo Perico.")
 async def ping_cayo(interaction: discord.Interaction, role: discord.Role, channel: discord.VoiceChannel):
+    # KLUCZOWA POPRAWKA: Defer
     await interaction.response.defer(ephemeral=True)
     embed = discord.Embed(title="Atak na CAYO PERICO!", description=f"Zapraszamy na {channel.mention}!", color=discord.Color(0xFFAA00))
     embed.set_image(url=CAYO_IMAGE_URL)
@@ -498,6 +571,7 @@ async def ping_cayo(interaction: discord.Interaction, role: discord.Role, channe
 # Lista wszystkich zapisanych
 @tree.command(name="list-all", description="Pokazuje listę wszystkich zapisanych")
 async def list_all(interaction: discord.Interaction):
+    # KLUCZOWA POPRAWKA: Defer
     await interaction.response.defer(ephemeral=True)
     desc = ""
     for name, mid, data in get_all_active_enrollments():
@@ -588,9 +662,11 @@ class RemoveEnrollmentView(ui.View):
 
     @ui.button(label="Potwierdź usunięcie", style=discord.ButtonStyle.red)
     async def confirm_remove(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer() # Defer w trakcie przetwarzania
+        
         select_menu = next((item for item in self.children if isinstance(item, ui.Select)), None)
         if not select_menu or not select_menu.values:
-            await interaction.response.send_message("⚠️ Najpierw wybierz zapis z listy!", ephemeral=True)
+            await interaction.followup.send("⚠️ Najpierw wybierz zapis z listy!", ephemeral=True)
             return
 
         type_str, msg_id_str = select_menu.values[0].split('-')
@@ -606,13 +682,13 @@ class RemoveEnrollmentView(ui.View):
             data_dict = events[type_str].get(msg_id)
 
         if not data_dict:
-            await interaction.response.edit_message(content="❌ Błąd: Nie znaleziono aktywnego zapisu o tym ID.", view=None)
+            await interaction.followup.edit_message(content="❌ Błąd: Nie znaleziono aktywnego zapisu o tym ID.", view=None)
             return
 
         participants = data_dict.get("participants", [])
         
         if user_id not in participants:
-            await interaction.response.edit_message(content=f"⚠️ **{self.member_to_remove.display_name}** nie jest zapisany(a) na ten **{type_str.capitalize()}**.", view=None)
+            await interaction.followup.edit_message(content=f"⚠️ **{self.member_to_remove.display_name}** nie jest zapisany(a) na ten **{type_str.capitalize()}**.", view=None)
             return
 
         participants.remove(user_id)
@@ -637,23 +713,25 @@ class RemoveEnrollmentView(ui.View):
             elif type_str in events:
                  events[type_str][msg_id]["participants"] = participants
 
-        await interaction.response.edit_message(
+        await interaction.followup.edit_message(
             content=f"✅ Pomyślnie wypisano **{self.member_to_remove.display_name}** z **{type_str.capitalize()}** (ID: `{msg_id}`).", 
             view=None
         )
 
 @tree.command(name="wypisz-z-capt", description="Wypisuje użytkownika z dowolnego aktywnego zapisu (Captures, AirDrop, Event).")
 async def remove_from_enrollment(interaction: discord.Interaction, członek: discord.Member):
+    await interaction.response.defer(ephemeral=True)
+    
     if interaction.user.id not in ADMIN_ROLES:
-        await interaction.response.send_message("⛔ Brak uprawnień do użycia tej komendy!", ephemeral=True)
+        await interaction.followup.send("⛔ Brak uprawnień do użycia tej komendy!", ephemeral=True)
         return
         
     enrollments = get_all_active_enrollments()
     if not enrollments:
-        await interaction.response.send_message("⚠️ Brak aktywnych zapisów, z których można wypisać użytkownika.", ephemeral=True)
+        await interaction.followup.send("⚠️ Brak aktywnych zapisów, z których można wypisać użytkownika.", ephemeral=True)
         return
         
-    await interaction.response.send_message(
+    await interaction.followup.send(
         f"Wybierz zapis, z którego usunąć **{członek.display_name}**:", 
         view=RemoveEnrollmentView(członek), 
         ephemeral=True
@@ -668,9 +746,11 @@ class AddEnrollmentView(ui.View):
 
     @ui.button(label="Potwierdź dodanie", style=discord.ButtonStyle.green)
     async def confirm_add(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer() # Defer w trakcie przetwarzania
+        
         select_menu = next((item for item in self.children if isinstance(item, ui.Select)), None)
         if not select_menu or not select_menu.values:
-            await interaction.response.send_message("⚠️ Najpierw wybierz zapis z listy!", ephemeral=True)
+            await interaction.followup.send("⚠️ Najpierw wybierz zapis z listy!", ephemeral=True)
             return
 
         type_str, msg_id_str = select_menu.values[0].split('-')
@@ -686,13 +766,13 @@ class AddEnrollmentView(ui.View):
             data_dict = events[type_str].get(msg_id)
 
         if not data_dict:
-            await interaction.response.edit_message(content="❌ Błąd: Nie znaleziono aktywnego zapisu o tym ID.", view=None)
+            await interaction.followup.edit_message(content="❌ Błąd: Nie znaleziono aktywnego zapisu o tym ID.", view=None)
             return
 
         participants = data_dict.get("participants", [])
         
         if user_id in participants:
-            await interaction.response.edit_message(content=f"⚠️ **{self.member_to_add.display_name}** jest już zapisany(a) na ten **{type_str.capitalize()}**.", view=None)
+            await interaction.followup.edit_message(content=f"⚠️ **{self.member_to_add.display_name}** jest już zapisany(a) na ten **{type_str.capitalize()}**.", view=None)
             return
 
         participants.append(user_id)
@@ -717,23 +797,25 @@ class AddEnrollmentView(ui.View):
              elif type_str in events:
                  events[type_str][msg_id]["participants"] = participants
 
-        await interaction.response.edit_message(
+        await interaction.followup.edit_message(
             content=f"✅ Pomyślnie wpisano **{self.member_to_add.display_name}** na **{type_str.capitalize()}** (ID: `{msg_id}`).", 
             view=None
         )
 
 @tree.command(name="wpisz-na-capt", description="Wpisuje użytkownika na dowolny aktywny zapis (Captures, AirDrop, Event).")
 async def add_to_enrollment(interaction: discord.Interaction, członek: discord.Member):
+    await interaction.response.defer(ephemeral=True)
+    
     if interaction.user.id not in ADMIN_ROLES:
-        await interaction.response.send_message("⛔ Brak uprawnień do użycia tej komendy!", ephemeral=True)
+        await interaction.followup.send("⛔ Brak uprawnień do użycia tej komendy!", ephemeral=True)
         return
         
     enrollments = get_all_active_enrollments()
     if not enrollments:
-        await interaction.response.send_message("⚠️ Brak aktywnych zapisów, na które można wpisać użytkownika.", ephemeral=True)
+        await interaction.followup.send("⚠️ Brak aktywnych zapisów, na które można wpisać użytkownika.", ephemeral=True)
         return
         
-    await interaction.response.send_message(
+    await interaction.followup.send(
         f"Wybierz zapis, na który wpisać **{członek.display_name}**:", 
         view=AddEnrollmentView(członek), 
         ephemeral=True
@@ -742,7 +824,10 @@ async def add_to_enrollment(interaction: discord.Interaction, członek: discord.
 
 # --- Start bota ---
 def run_discord_bot():
-    client.run(token)
+    try:
+        client.run(token)
+    except Exception as e:
+        print(f"Błąd uruchomienia bota: {e}")
 
 threading.Thread(target=run_discord_bot).start()
 
