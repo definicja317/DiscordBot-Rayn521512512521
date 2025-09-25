@@ -21,13 +21,16 @@ if not token:
     print("Błąd: brak tokena Discord. Ustaw DISCORD_BOT_TOKEN w Render lub w .env")
     sys.exit(1)
 
+# --- ID SERWERA TESTOWEGO (WPISZ TUTAJ SWOJE ID) ---
+GUILD_ID = 1206228465809100800  # <<< WPISZ SWOJE ID SERWERA
+
 # --- Ustawienia ---
 PICK_ROLE_ID = 1413424476770664499 # ID ROLI DO UŻYWANIA PRZYCISKU "PICKUJ OSOBY"
 STATUS_ADMINS = [1184620388425138183]  # <<< WAŻNE: WPISZ TUTAJ SWOJE ID DISCORD!
 ADMIN_ROLES = STATUS_ADMINS # Używane do komend administracyjnych
 ZANCUDO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414194392214011974/image.png"
 CAYO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414204332747915274/image.png"
-LOGO_URL = "https://cdn.discordapp.com/attachments/1184622314302754857/1420796249484824757/RInmPqb.webp?ex=68d6b31e&is=68d5619e&hm=0cdf3f7cbb269b12c9f47d7eb034e40a8d830ff502ca9ceacb3d7902d3819413&"
+LOGO_URL = "https://cdn.discordapp.com/icons/1206228465809100800/849c19ddef5481d01a3dfe4ccfaa8233.webp?size=1024"
 
 # --- Discord Client ---
 intents = discord.Intents.default()
@@ -281,7 +284,6 @@ class CapturesView(ui.View):
 # =======================================================
 # <<< FUNKCJE DLA SQUADÓW >>>
 # =======================================================
-
 def create_squad_embed(guild: discord.Guild, author_name: str, members_list: str = "Brak członków składu.", title: str = "Main Squad"):
     """Tworzy embed dla Squadu."""
     
@@ -383,7 +385,18 @@ class SquadView(ui.View):
 # Zamiast tego dodajemy komendę /sync.
 @client.event
 async def on_ready():
-    print(f"✅ Zalogowano jako {client.user}")
+    try:
+        guild = discord.Object(id=GUILD_ID)
+        await tree.sync(guild=guild)  # szybka synchronizacja tylko z Twoim serwerem
+        print(f"✅ Zalogowano jako {client.user} i zsynchronizowano komendy na serwerze {GUILD_ID}")
+    except Exception as e:
+        # Fallback — jeśli synchronizacja na guild się nie powiedzie, spróbuj globalnej
+        try:
+            await tree.sync()
+            print(f"✅ Zalogowano jako {client.user} i zsynchronizowano komendy globalnie (fallback).")
+        except Exception as e2:
+            print("❌ Błąd podczas synchronizacji komend:", e, e2)
+            print("Bot nadal działa, ale komendy mogą nie być zarejestrowane.")
 
 
 # NOWA KOMENDA ADMIN /SYNC
@@ -395,10 +408,15 @@ async def sync_commands(interaction: discord.Interaction):
 
     await interaction.response.defer(ephemeral=True)
     
-    # Globalna synchronizacja komend
-    await tree.sync() 
-    
-    await interaction.followup.send("✅ Pomyślnie zsynchronizowano komendy slash z Discordem! Powinny być już widoczne.", ephemeral=True)
+    # Synchronizacja na serwerze testowym (szybsza)
+    try:
+        guild = discord.Object(id=GUILD_ID)
+        await tree.sync(guild=guild)
+        await interaction.followup.send("✅ Pomyślnie zsynchronizowano komendy slash z Discordem (guild sync)!", ephemeral=True)
+    except Exception:
+        # fallback global
+        await tree.sync()
+        await interaction.followup.send("✅ Pomyślnie zsynchronizowano komendy slash globalnie!", ephemeral=True)
 
 
 # Komenda SQUAD
