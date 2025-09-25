@@ -314,11 +314,11 @@ class SquadModal(ui.Modal, title='Edytuj Skład'):
         super().__init__()
         self.message_id = message_id
         
-        # <<< NAPRAWIONO BŁĄD HTTP 400: Optymalizacja danych w Modalu >>>
+        # Optymalizacja danych w Modalu
         editable_content = self._prepare_editable_content(current_content)
         
         self.list_input = ui.TextInput(
-            label='Lista (Wpisz nr-nazwa/nick, np. 1- Kowalski)',
+            label='Lista (Wpisz nr-ID/nazwa/nick, np. 1- 1234567890)',
             style=discord.TextStyle.paragraph,
             default=editable_content,
             required=True,
@@ -338,7 +338,7 @@ class SquadModal(ui.Modal, title='Edytuj Skład'):
             
             if line:
                  new_lines.append(line)
-        return "\n".join(new_lines) if new_lines else "1- [Wpisz osobę]\n2- [Wpisz osobę]"
+        return "\n".join(new_lines) if new_lines else "1- [Wpisz ID lub nazwę]\n2- [Wpisz ID lub nazwę]"
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -347,7 +347,6 @@ class SquadModal(ui.Modal, title='Edytuj Skład'):
         final_lines = []
         guild = interaction.guild
 
-        # <<< NAPRAWIONO MECHANIZM ZAMIANY NAZWY NA PING >>>
         for line in input_lines:
             line = line.strip()
             if not line:
@@ -362,27 +361,36 @@ class SquadModal(ui.Modal, title='Edytuj Skład'):
             prefix_match = re.match(r'(.+[-:.]\s*)', line)
             
             if prefix_match:
-                name_to_search = line[prefix_match.end():].strip()
+                name_or_id_to_search = line[prefix_match.end():].strip()
                 prefix = prefix_match.group(0)
             else:
-                name_to_search = line
+                name_or_id_to_search = line
                 prefix = ""
 
             member = None
-            if name_to_search:
-                # Spróbuj znaleźć członka na serwerze po nazwie wyświetlanej lub nazwie użytkownika
-                member = guild.get_member_named(name_to_search)
+            if name_or_id_to_search:
+                
+                # <<< NOWA LOGIKA: Sprawdź, czy to jest ID >>>
+                if name_or_id_to_search.isdigit():
+                    try:
+                        member_id = int(name_or_id_to_search)
+                        member = guild.get_member(member_id)
+                    except ValueError:
+                        pass # To nie był poprawny numer
+                        
+                # <<< STARA LOGIKA: Jeśli nie ID, spróbuj znaleźć po nazwie/tagu >>>
+                if member is None:
+                    member = guild.get_member_named(name_or_id_to_search)
 
             if member:
                 # Jeśli znaleziono, zamień na ping
                 ping = member.mention
                 final_lines.append(f"{prefix}{ping} | **{member.display_name}**")
             else:
-                # Jeśli nie znaleziono i nie jest to ping, dodaj jako zwykły tekst
+                # Jeśli nie znaleziono, dodaj jako zwykły tekst
                 final_lines.append(line)
         
         new_members_list = "\n".join(final_lines)
-        # <<< KONIEC MECHANIZMU ZAMIANY NAZWY NA PING >>>
 
         squad_data = squads.get(self.message_id)
 
@@ -414,7 +422,7 @@ class SquadModal(ui.Modal, title='Edytuj Skład'):
             content = f"<@&{role_id}> **Zaktualizowano Skład!**" if role_id else ""
             
             await message.edit(content=content, embed=new_embed, view=new_view)
-            await interaction.followup.send("✅ Skład został pomyślnie zaktualizowany! Aktywne pingi powinny być widoczne w wiadomości.", ephemeral=True)
+            await interaction.followup.send("✅ Skład został pomyślnie zaktualizowany! Wprowadzone ID i nazwy zostały przekształcone na pingi.", ephemeral=True)
         else:
             await interaction.followup.send("Błąd: Nie można odświeżyć wiadomości składu.", ephemeral=True)
 
@@ -436,7 +444,7 @@ class SquadView(ui.View):
             return
             
         # Pobieramy aktualną listę do wyświetlenia w Modalu
-        current_content = squad_data.get("members_list", "1- [Wpisz osobę]")
+        current_content = squad_data.get("members_list", "1- [Wpisz ID lub nazwę]")
         
         # Uruchamiamy Modal
         await interaction.response.send_modal(SquadModal(self.message_id, current_content))
@@ -467,7 +475,7 @@ async def create_squad(interaction: discord.Interaction, rola: discord.Role, tyt
     role_id = rola.id
     
     # 1. Tworzymy początkowy embed i view
-    initial_members = "1- [Wpisz osobę]\n2- [Wpisz osobę]\n3- [Wpisz osobę]"
+    initial_members = "1- [Wpisz ID lub nazwę]\n2- [Wpisz ID lub nazwę]\n3- [Wpisz ID lub nazwę]"
     embed = create_squad_embed(interaction.guild, author_name, initial_members, tytul)
     view = SquadView(0, role_id)
     
