@@ -24,7 +24,9 @@ if not token:
 # --- Ustawienia ---
 PICK_ROLE_ID = 1413424476770664499
 STATUS_ADMINS = [1184620388425138183, 1409225386998501480, 1007732573063098378, 364869132526551050]  # <<< wpisz swoje ID
-ADMIN_ROLES = STATUS_ADMINS # Używane do komend /wpisz-na-capt, /wypisz-z-capt, /create-squad
+# <<< NOWA ZMIANA - UŻYCIE STATUS_ADMINS RÓWNIEŻ DO WPISYWANIA/WYPISYWANIA
+ADMIN_ROLES = STATUS_ADMINS
+# >>>
 ZANCUDO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414194392214011974/image.png"
 CAYO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414204332747915274/image.png"
 LOGO_URL = "https://cdn.discordapp.com/attachments/1184622314302754857/1420796249484824757/RInmPqb.webp?ex=68d6b31e&is=68d5619e&hm=0cdf3f7cbb269b12c9f47d7eb034e40a8d830ff502ca9ceacb3d7902d3819413&"
@@ -36,14 +38,12 @@ client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
 # --- Pamięć zapisów ---
-# {msg_id: {"participants": [member_ids], "message": discord.Message, "channel_id": int, "author_name": str}}
-captures = {}   
-airdrops = {}   
-events = {"zancudo": {}, "cayo": {}} 
-# NOWA PAMIĘĆ: {msg_id: {"role_id": int, "members_list": str, "message": discord.Message, "channel_id": int, "author_name": str}}
-squads = {}     
+# WAŻNA ZMIANA: Aby ułatwić zarządzanie przez admina, captures również przechowuje IDs
+captures = {}   # {msg_id: {"participants": [member_ids], "message": discord.Message, "channel_id": int}}
+airdrops = {}   # {msg_id: {"participants": [ids], "message": discord.Message, "channel_id": int}}
+events = {"zancudo": {}, "cayo": {}}  # {event_type: {msg_id: {"participants": [ids], "message": discord.Message, "channel_id": int}}}
 
-# <<< ZARZĄDZANIE ZAPISAMI >>>
+# <<< NOWA FUNKCJA - WSPARCIE DLA ZARZĄDZANIA ADMINA >>>
 def get_all_active_enrollments():
     """Zwraca listę wszystkich aktywnych zapisów w formacie: [(nazwa, id_wiadomości, słownik_danych)]."""
     all_enrollments = []
@@ -66,12 +66,13 @@ def get_all_active_enrollments():
 class EnrollmentSelectMenu(ui.Select):
     """Rozwijane menu do wyboru konkretnego aktywnego zapisu."""
     def __init__(self, action: str):
-        self.action = action 
+        self.action = action # 'add' lub 'remove'
         enrollments = get_all_active_enrollments()
         options = []
         
         for name, msg_id, data in enrollments:
             count = len(data.get("participants", []))
+            # Wartość opcji to: "typ_zapisu-id_wiadomości"
             options.append(
                 discord.SelectOption(
                     label=f"{name} (ID: {msg_id}) - {count} os.", 
@@ -87,8 +88,10 @@ class EnrollmentSelectMenu(ui.Select):
         )
         
     async def callback(self, interaction: discord.Interaction):
+        # Ta część będzie obsłużona w komendach
         pass 
-# <<< KONIEC ZARZĄDZANIE ZAPISAMI >>>
+
+# >>> KONIEC NOWEJ FUNKCJI - WSPARCIE DLA ZARZĄDZANIA ADMINA
 
 # =====================
 #       AIRDROP
@@ -99,7 +102,7 @@ class AirdropView(ui.View):
         self.message_id = message_id
         self.description = description
         self.voice_channel = voice_channel
-        self.participants: list[int] = [] 
+        self.participants: list[int] = [] # Pamięć ID
         self.author_name = author_name
 
     def make_embed(self, guild: discord.Guild):
@@ -113,7 +116,7 @@ class AirdropView(ui.View):
                 if member:
                     lines.append(f"- {member.mention} | **{member.display_name}**")
                 else:
-                    lines.append(f"- <@{uid}> (Użytkownik opuścił serwer)")
+                    lines.append(f"- <@{uid}>")
             embed.add_field(name=f"Zapisani ({len(self.participants)}):", value="\n".join(lines), inline=False)
         else:
             embed.add_field(name="Zapisani:", value="Brak uczestników", inline=False)
@@ -122,32 +125,38 @@ class AirdropView(ui.View):
 
     @ui.button(label="✅ Dołącz", style=discord.ButtonStyle.green)
     async def join(self, interaction: discord.Interaction, button: ui.Button):
+        # Zapisz w lokalnej i globalnej pamięci
         if interaction.user.id in self.participants:
             await interaction.response.send_message("Już jesteś zapisany(a).", ephemeral=True)
             return
         self.participants.append(interaction.user.id)
         airdrops[self.message_id]["participants"].append(interaction.user.id)
-        # Edycja wiadomości
         await interaction.message.edit(embed=self.make_embed(interaction.guild), view=self)
         await interaction.response.send_message("✅ Dołączyłeś(aś)!", ephemeral=True)
 
     @ui.button(label="❌ Opuść", style=discord.ButtonStyle.red)
     async def leave(self, interaction: discord.Interaction, button: ui.Button):
+        # Usuń z lokalnej i globalnej pamięci
         if interaction.user.id not in self.participants:
             await interaction.response.send_message("Nie jesteś zapisany(a).", ephemeral=True)
             return
         self.participants.remove(interaction.user.id)
         airdrops[self.message_id]["participants"].remove(interaction.user.id)
-        # Edycja wiadomości
         await interaction.message.edit(embed=self.make_embed(interaction.guild), view=self)
         await interaction.response.send_message("❌ Opuściłeś(aś).", ephemeral=True)
 
 # =====================
 #       CAPTURES
 # =====================
+# <<< ZMIANA - W CapturesView Participants są teraz przechowywani jako ID
+# Aby spójnie zarządzać, zmieniamy też to, jak to jest przechowywane.
+# W klasach musimy pracować z ID, a nie obiektami Member.
+# Zmieniamy też sposób wyświetlania, aby używać IDs z pamięci globalnej.
+# >>>
 class PlayerSelectMenu(ui.Select):
     def __init__(self, capture_id: int, guild: discord.Guild):
         self.capture_id = capture_id
+        # Używamy ID z pamięci globalnej do utworzenia opcji
         participant_ids = captures.get(self.capture_id, {}).get("participants", [])
         options = []
         for member_id in participant_ids:
@@ -170,10 +179,16 @@ class PickPlayersView(ui.View):
     def __init__(self, capture_id: int):
         super().__init__()
         self.capture_id = capture_id
-        pass 
+        # Select menu musi być inicjowane w callbacku lub z dostępem do guild
+        # Aby to uprościć, inicjujemy go tu, ale przekazujemy go do PickPlayersView
+        # Przenosimy inicjalizację do callbacku pick_button
+        # self.player_select_menu = PlayerSelectMenu(capture_id) 
+        # self.add_item(self.player_select_menu)
+        pass # Zostawiamy puste, bo PlayerSelectMenu jest tworzone później
 
     @ui.button(label="Potwierdź wybór", style=discord.ButtonStyle.green)
     async def confirm_pick(self, interaction: discord.Interaction, button: ui.Button):
+        # Ponieważ SelectMenu było dynamicznie tworzone, musimy je znaleźć po interakcji
         select_menu = next((item for item in self.children if isinstance(item, ui.Select)), None)
         
         if not select_menu:
@@ -206,43 +221,15 @@ class PickPlayersView(ui.View):
 
 
 class CapturesView(ui.View):
-    def __init__(self, capture_id: int, author_name: str): 
+    def __init__(self, capture_id: int):
         super().__init__(timeout=None)
         self.capture_id = capture_id
-        self.author_name = author_name
-
-    def make_embed(self, guild: discord.Guild):
-        participants_ids = captures.get(self.capture_id, {}).get("participants", [])
-        
-        embed = discord.Embed(title="CAPTURES!", description="Kliknij przycisk, aby się zapisać!", color=discord.Color(0xFFFFFF))
-        
-        # LOGIKA WYŚWIETLANIA LISTY OSÓB
-        if participants_ids:
-            lines = []
-            for uid in participants_ids:
-                member = guild.get_member(uid)
-                if member:
-                    lines.append(f"- {member.mention} | **{member.display_name}**")
-                else:
-                    lines.append(f"- <@{uid}> (Użytkownik opuścił serwer)")
-            embed.add_field(name=f"Zapisani ({len(participants_ids)}):", value="\n".join(lines), inline=False)
-        else:
-            embed.add_field(name="Zapisani:", value="Brak uczestników", inline=False)
-            
-        # Stopka z autorem aktywacji
-        embed.set_footer(text=f"Wystawione przez {self.author_name}")
-        return embed
 
     @ui.button(label="✅ Wpisz się", style=discord.ButtonStyle.green)
     async def join_button(self, interaction: discord.Interaction, button: ui.Button):
         user_id = interaction.user.id
         if user_id not in captures.get(self.capture_id, {}).get("participants", []):
             captures.setdefault(self.capture_id, {"participants": []})["participants"].append(user_id)
-            
-            data = captures.get(self.capture_id)
-            if data and data.get("message"):
-                await data["message"].edit(embed=self.make_embed(interaction.guild), view=self)
-            
             await interaction.response.send_message("Zostałeś(aś) zapisany(a)!", ephemeral=True)
         else:
             await interaction.response.send_message("Już jesteś zapisany(a).", ephemeral=True)
@@ -252,11 +239,6 @@ class CapturesView(ui.View):
         user_id = interaction.user.id
         if user_id in captures.get(self.capture_id, {}).get("participants", []):
             captures[self.capture_id]["participants"].remove(user_id)
-            
-            data = captures.get(self.capture_id)
-            if data and data.get("message"):
-                await data["message"].edit(embed=self.make_embed(interaction.guild), view=self)
-            
             await interaction.response.send_message("Zostałeś(aś) wypisany(a).", ephemeral=True)
         else:
             await interaction.response.send_message("Nie jesteś zapisany(a).", ephemeral=True)
@@ -273,116 +255,10 @@ class CapturesView(ui.View):
             return
             
         pick_view = PickPlayersView(self.capture_id)
+        # Dodajemy PlayerSelectMenu dynamicznie, bo musi mieć dostęp do guild
         pick_view.add_item(PlayerSelectMenu(self.capture_id, interaction.guild))
         
         await interaction.response.send_message("Wybierz do 25 graczy:", view=pick_view, ephemeral=True)
-
-
-# =======================================================
-# <<< NOWE FUNKCJE DLA SQUADÓW >>>
-# =======================================================
-
-def create_squad_embed(guild: discord.Guild, author_name: str, members_list: str = "Brak członków składu.", title: str = "Main Squad"):
-    """Tworzy embed dla Squadu."""
-    # Usuń numerację i puste linie dla zliczenia, jeśli jest numeracja 1-, 2-, 3-
-    member_lines = [line for line in members_list.split('\n') if line.strip()]
-    count = 0
-    for line in member_lines:
-        if line.split('-', 1)[0].isdigit() or line.split('-', 1)[0].strip() == '':
-             count += 1
-        elif line.strip(): # Licz każdą niepustą linię jeśli nie ma numeracji
-             count += 1
-
-    embed = discord.Embed(
-        title=title, 
-        description=f"Oto aktualny skład:\n\n{members_list}", 
-        color=discord.Color.white() # Biały kolor
-    )
-    embed.set_thumbnail(url=LOGO_URL)
-    
-    embed.add_field(name="Liczba członków:", value=f"**{count}**", inline=False)
-    
-    embed.set_footer(text=f"Aktywowane przez {author_name}")
-    return embed
-
-class SquadModal(ui.Modal, title='Edytuj Skład'):
-    def __init__(self, message_id: int, current_content: str):
-        super().__init__()
-        self.message_id = message_id
-        
-        self.list_input = ui.TextInput(
-            label='Lista członków (np. 1- @nick, 2- @nick...)',
-            style=discord.TextStyle.paragraph,
-            default=current_content,
-            required=True,
-            max_length=4000
-        )
-        self.add_item(self.list_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-
-        new_members_list = self.list_input.value
-        squad_data = squads.get(self.message_id)
-
-        if not squad_data:
-            await interaction.followup.send("Błąd: Nie znaleziono danych tego składu.", ephemeral=True)
-            return
-
-        # Aktualizujemy listę członków w pamięci
-        squad_data["members_list"] = new_members_list
-        
-        # Odtwarzamy embed
-        message = squad_data.get("message")
-        author_name = squad_data.get("author_name", "Bot")
-        
-        # Używamy tytułu z wiadomości lub fallback
-        title = "Main Squad"
-        if message and message.embeds:
-            title = message.embeds[0].title
-            
-        new_embed = create_squad_embed(interaction.guild, author_name, new_members_list, title)
-        
-        # Odświeżamy wiadomość
-        if message and hasattr(message, 'edit'):
-            # Odtwarzamy widok, by był spójny
-            new_view = SquadView(self.message_id, squad_data.get("role_id"))
-            
-            # Wysłanie pingu na początku zawartości
-            role_id = squad_data.get("role_id")
-            content = f"<@&{role_id}> **Zaktualizowano Skład!**" if role_id else ""
-            
-            await message.edit(content=content, embed=new_embed, view=new_view)
-            await interaction.followup.send("✅ Skład został pomyślnie zaktualizowany!", ephemeral=True)
-        else:
-            await interaction.followup.send("Błąd: Nie można odświeżyć wiadomości składu.", ephemeral=True)
-
-class SquadView(ui.View):
-    def __init__(self, message_id: int, role_id: int):
-        super().__init__(timeout=None)
-        self.message_id = message_id
-        self.role_id = role_id
-
-    @ui.button(label="Zarządzaj składem (ADMIN)", style=discord.ButtonStyle.blurple)
-    async def manage_squad_button(self, interaction: discord.Interaction, button: ui.Button):
-        if interaction.user.id not in ADMIN_ROLES:
-            await interaction.response.send_message("⛔ Brak uprawnień do zarządzania składem!", ephemeral=True)
-            return
-
-        squad_data = squads.get(self.message_id)
-        if not squad_data:
-            await interaction.response.send_message("Błąd: Nie znaleziono danych tego składu.", ephemeral=True)
-            return
-            
-        # Pobieramy aktualną listę do wyświetlenia w Modalu
-        current_content = squad_data.get("members_list", "1- @...")
-        
-        # Uruchamiamy Modal
-        await interaction.response.send_modal(SquadModal(self.message_id, current_content))
-
-# =======================================================
-# <<< KONIEC FUNKCJI DLA SQUADÓW >>>
-# =======================================================
 
 
 # =====================
@@ -390,62 +266,24 @@ class SquadView(ui.View):
 # =====================
 @client.event
 async def on_ready():
+    # <<< ZMIANA - Wczytanie widoków (jeśli wiadomości przetrwały restart) >>>
+    # Wymaga to pewnych zmian w sposobie przechowywania danych, 
+    # ale na razie dla celów demonstracyjnych pomijamy trwałe wczytywanie widoków,
+    # ponieważ nie mamy backendu do trwałego zapisu wszystkich danych.
+    # W przypadku bota hostowanego na Render, po restarcie dane będą puste.
     await tree.sync()
     print(f"✅ Zalogowano jako {client.user}")
-
-# Nowa komenda SQUAD
-@tree.command(name="create-squad", description="Tworzy ogłoszenie o składzie z możliwością edycji.")
-async def create_squad(interaction: discord.Interaction, rola: discord.Role, tytul: str = "Main Squad"):
-    if interaction.user.id not in ADMIN_ROLES:
-        await interaction.response.send_message("⛔ Brak uprawnień!", ephemeral=True)
-        return
-
-    await interaction.response.defer(ephemeral=True)
-    
-    author_name = interaction.user.display_name
-    role_id = rola.id
-    
-    # 1. Tworzymy początkowy embed i view
-    initial_members = "1- [Wpisz osobę]\n2- [Wpisz osobę]\n3- [Wpisz osobę]"
-    embed = create_squad_embed(interaction.guild, author_name, initial_members, tytul)
-    view = SquadView(0, role_id)
-    
-    # 2. Wysyłamy wiadomość z pingiem
-    content = f"{rola.mention}"
-    sent = await interaction.channel.send(content=content, embed=embed, view=view)
-    
-    # 3. Zapisujemy do pamięci
-    squads[sent.id] = {
-        "role_id": role_id, 
-        "members_list": initial_members, 
-        "message": sent, 
-        "channel_id": sent.channel.id,
-        "author_name": author_name,
-    }
-    
-    # 4. Aktualizujemy ID wiadomości w widoku
-    view.message_id = sent.id
-    await sent.edit(view=view) 
-    
-    await interaction.followup.send(f"✅ Ogłoszenie o składzie '{tytul}' dla roli {rola.mention} wysłane!", ephemeral=True)
-
 
 # Captures
 @tree.command(name="create-capt", description="Tworzy ogłoszenie o captures.")
 async def create_capt(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True) 
-    
-    author_name = interaction.user.display_name
-    view = CapturesView(0, author_name) 
-    embed = view.make_embed(interaction.guild)
-    
-    sent = await interaction.channel.send(content="@everyone", embed=embed, view=view)
-    
-    captures[sent.id] = {"participants": [], "message": sent, "channel_id": sent.channel.id, "author_name": author_name}
-    
-    view.capture_id = sent.id 
-    await sent.edit(view=view) 
-    
+    await interaction.response.defer(ephemeral=True) # Defer, aby wysłać content
+    embed = discord.Embed(title="CAPTURES!", description="Kliknij przycisk, aby się zapisać!", color=discord.Color(0xFFFFFF))
+    # Wysyłamy wiadomość, a potem edytujemy widok
+    sent = await interaction.channel.send(content="@everyone", embed=embed, view=CapturesView(0))
+    # Pamięć: ID, Message Object, Channel ID
+    captures[sent.id] = {"participants": [], "message": sent, "channel_id": sent.channel.id}
+    await sent.edit(view=CapturesView(sent.id))
     await interaction.followup.send("Ogłoszenie o captures wysłane!", ephemeral=True)
 
 # AirDrop
@@ -456,23 +294,19 @@ async def airdrop_command(interaction: discord.Interaction, channel: discord.Tex
     embed = view.make_embed(interaction.guild)
     sent = await channel.send(content=f"{role.mention}", embed=embed, view=view)
     view.message_id = sent.id
-    airdrops[sent.id] = {
-        "participants": [], 
-        "message": sent, 
-        "channel_id": sent.channel.id, 
-        "description": opis, 
-        "voice_channel_id": voice.id, 
-        "author_name": interaction.user.display_name
-    }
+    # Pamięć: ID, Message Object, Channel ID
+    airdrops[sent.id] = {"participants": [], "message": sent, "channel_id": sent.channel.id}
     await interaction.followup.send("✅ AirDrop utworzony!", ephemeral=True)
 
 # Eventy Zancudo / Cayo
+# Zmiana: Aby móc nimi zarządzać, dodajemy też je do pamięci "events"
 @tree.command(name="ping-zancudo", description="Wysyła ogłoszenie o ataku na Fort Zancudo.")
 async def ping_zancudo(interaction: discord.Interaction, role: discord.Role, channel: discord.VoiceChannel):
     await interaction.response.defer(ephemeral=True)
     embed = discord.Embed(title="Atak na FORT ZANCUDO!", description=f"Zapraszamy na {channel.mention}!", color=discord.Color(0xFF0000))
     embed.set_image(url=ZANCUDO_IMAGE_URL)
     sent = await interaction.channel.send(content=f"{role.mention}", embed=embed)
+    # Pamięć: ID, Message Object, Channel ID
     events["zancudo"][sent.id] = {"participants": [], "message": sent, "channel_id": sent.channel.id}
     await interaction.followup.send("✅ Ogłoszenie o ataku wysłane!", ephemeral=True)
 
@@ -482,6 +316,7 @@ async def ping_cayo(interaction: discord.Interaction, role: discord.Role, channe
     embed = discord.Embed(title="Atak na CAYO PERICO!", description=f"Zapraszamy na {channel.mention}!", color=discord.Color(0xFFAA00))
     embed.set_image(url=CAYO_IMAGE_URL)
     sent = await interaction.channel.send(content=f"{role.mention}", embed=embed)
+    # Pamięć: ID, Message Object, Channel ID
     events["cayo"][sent.id] = {"participants": [], "message": sent, "channel_id": sent.channel.id}
     await interaction.followup.send("✅ Ogłoszenie o ataku wysłane!", ephemeral=True)
 
@@ -490,16 +325,13 @@ async def ping_cayo(interaction: discord.Interaction, role: discord.Role, channe
 async def list_all(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     desc = ""
+    # Używamy nowej funkcji do pobrania wszystkich zapisów
     for name, mid, data in get_all_active_enrollments():
         desc += f"\n**{name} (msg {mid})**: {len(data['participants'])} osób"
         
-    for mid, data in squads.items():
-        count = len([line for line in data['members_list'].split('\n') if line.strip()])
-        desc += f"\n**Squad (msg {mid})**: {count} osób (zarządzane ręcznie)"
-
     if not desc:
-        desc = "Brak aktywnych zapisów i składów."
-    embed = discord.Embed(title="📋 Lista wszystkich zapisanych i składów", description=desc, color=discord.Color.blue())
+        desc = "Brak aktywnych zapisów."
+    embed = discord.Embed(title="📋 Lista wszystkich zapisanych", description=desc, color=discord.Color.blue())
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 # Set status
@@ -522,7 +354,7 @@ async def set_status(interaction: discord.Interaction, status: str, activity: st
     await interaction.response.send_message(f"✅ Status ustawiony na {status}", ephemeral=True)
 
 # ===============================================
-# <<< KOMENDA - WYPISZ-Z-CAPT >>>
+# <<< NOWA KOMENDA - WYPISZ-Z-CAPT >>>
 # ===============================================
 class RemoveEnrollmentView(ui.View):
     def __init__(self, member_to_remove: discord.Member):
@@ -532,15 +364,18 @@ class RemoveEnrollmentView(ui.View):
 
     @ui.button(label="Potwierdź usunięcie", style=discord.ButtonStyle.red)
     async def confirm_remove(self, interaction: discord.Interaction, button: ui.Button):
+        # Sprawdzamy, czy wybrano element z Select Menu
         select_menu = next((item for item in self.children if isinstance(item, ui.Select)), None)
         if not select_menu or not select_menu.values:
             await interaction.response.send_message("⚠️ Najpierw wybierz zapis z listy!", ephemeral=True)
             return
 
+        # Wartość to: "typ_zapisu-id_wiadomości"
         type_str, msg_id_str = select_menu.values[0].split('-')
         msg_id = int(msg_id_str)
         user_id = self.member_to_remove.id
         
+        # Znajdź właściwy słownik danych
         data_dict = None
         if type_str == "captures":
             data_dict = captures.get(msg_id)
@@ -559,27 +394,25 @@ class RemoveEnrollmentView(ui.View):
             await interaction.response.edit_message(content=f"⚠️ **{self.member_to_remove.display_name}** nie jest zapisany(a) na ten **{type_str.capitalize()}**.", view=None)
             return
 
+        # Usuń użytkownika
         participants.remove(user_id)
         
+        # Próbujemy odświeżyć wiadomość
         message = data_dict.get("message")
         if message and hasattr(message, 'edit'):
+            # Jeśli to AirDrop, użyjemy jego funkcji make_embed
             if type_str == "airdrop":
-                voice_channel = message.guild.get_channel(data_dict["voice_channel_id"])
-                description = data_dict["description"]
-                author_name = data_dict["author_name"]
-                
-                view_obj = AirdropView(msg_id, description, voice_channel, author_name)
+                # Musimy odtworzyć obiekt widoku
+                view_obj = AirdropView(msg_id, message.embeds[0].description, message.guild.get_channel(data_dict["channel_id"]), message.embeds[0].footer.text.replace("Wystawione przez ", ""))
                 view_obj.participants = participants
+                # Zmieniamy treść w globalnej pamięci
                 airdrops[msg_id]["participants"] = participants
                 await message.edit(embed=view_obj.make_embed(message.guild), view=view_obj)
+            # W przypadku Captures, musimy tylko usunąć ID z pamięci
             elif type_str == "captures":
+                 # Captures nie odświeża embeda z listą, więc wystarczy usunięcie z pamięci.
                  captures[msg_id]["participants"] = participants
-                 
-                 author_name = data_dict["author_name"]
-                     
-                 view_obj = CapturesView(msg_id, author_name)
-                 new_embed = view_obj.make_embed(message.guild)
-                 await message.edit(embed=new_embed, view=view_obj)
+            # Eventy Zancudo/Cayo nie mają interaktywnego embeda, więc wystarczy usunięcie z pamięci.
             elif type_str in events:
                  events[type_str][msg_id]["participants"] = participants
 
@@ -606,7 +439,7 @@ async def remove_from_enrollment(interaction: discord.Interaction, członek: dis
     )
 
 # ===============================================
-# <<< KOMENDA - WPISZ-NA-CAPT >>>
+# <<< NOWA KOMENDA - WPISZ-NA-CAPT >>>
 # ===============================================
 class AddEnrollmentView(ui.View):
     def __init__(self, member_to_add: discord.Member):
@@ -616,15 +449,18 @@ class AddEnrollmentView(ui.View):
 
     @ui.button(label="Potwierdź dodanie", style=discord.ButtonStyle.green)
     async def confirm_add(self, interaction: discord.Interaction, button: ui.Button):
+        # Sprawdzamy, czy wybrano element z Select Menu
         select_menu = next((item for item in self.children if isinstance(item, ui.Select)), None)
         if not select_menu or not select_menu.values:
             await interaction.response.send_message("⚠️ Najpierw wybierz zapis z listy!", ephemeral=True)
             return
 
+        # Wartość to: "typ_zapisu-id_wiadomości"
         type_str, msg_id_str = select_menu.values[0].split('-')
         msg_id = int(msg_id_str)
         user_id = self.member_to_add.id
         
+        # Znajdź właściwy słownik danych
         data_dict = None
         if type_str == "captures":
             data_dict = captures.get(msg_id)
@@ -643,27 +479,23 @@ class AddEnrollmentView(ui.View):
             await interaction.response.edit_message(content=f"⚠️ **{self.member_to_add.display_name}** jest już zapisany(a) na ten **{type_str.capitalize()}**.", view=None)
             return
 
+        # Dodaj użytkownika
         participants.append(user_id)
         
+        # Próbujemy odświeżyć wiadomość
         message = data_dict.get("message")
         if message and hasattr(message, 'edit'):
              if type_str == "airdrop":
-                voice_channel = message.guild.get_channel(data_dict["voice_channel_id"])
-                description = data_dict["description"]
-                author_name = data_dict["author_name"]
-
-                view_obj = AirdropView(msg_id, description, voice_channel, author_name)
+                # Musimy odtworzyć obiekt widoku
+                view_obj = AirdropView(msg_id, message.embeds[0].description, message.guild.get_channel(data_dict["channel_id"]), message.embeds[0].footer.text.replace("Wystawione przez ", ""))
                 view_obj.participants = participants
+                # Zmieniamy treść w globalnej pamięci
                 airdrops[msg_id]["participants"] = participants
                 await message.edit(embed=view_obj.make_embed(message.guild), view=view_obj)
+             # W przypadku Captures, musimy tylko dodać ID do pamięci
              elif type_str == "captures":
                  captures[msg_id]["participants"] = participants
-                 
-                 author_name = data_dict["author_name"]
-                     
-                 view_obj = CapturesView(msg_id, author_name)
-                 new_embed = view_obj.make_embed(message.guild)
-                 await message.edit(embed=new_embed, view=view_obj)
+             # Eventy Zancudo/Cayo nie mają interaktywnego embeda, więc wystarczy dodanie do pamięci.
              elif type_str in events:
                  events[type_str][msg_id]["participants"] = participants
 
