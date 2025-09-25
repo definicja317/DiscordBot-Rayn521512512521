@@ -6,7 +6,7 @@ import threading
 from flask import Flask
 from dotenv import load_dotenv
 from datetime import datetime
-import re # <<< DODANO: import modułu do wyrażeń regularnych
+import re 
 
 # --- Flask ---
 app = Flask(__name__)
@@ -286,22 +286,17 @@ class CapturesView(ui.View):
 
 def create_squad_embed(guild: discord.Guild, author_name: str, members_list: str = "Brak członków składu.", title: str = "Main Squad"):
     """Tworzy embed dla Squadu."""
-    # Usuń numerację i puste linie dla zliczenia, jeśli jest numeracja 1-, 2-, 3-
     member_lines = [line for line in members_list.split('\n') if line.strip()]
-    count = 0
-    # Lepsze liczenie, ignorujące linie z samymi pingami lub samymi liczbami/myślnikami
-    for line in member_lines:
-        # Pomiń, jeśli linia to tylko ping
-        if re.fullmatch(r'<@!\d+>|<@\d+>', line.strip()):
-            continue
-        # Sprawdź, czy linia zawiera jakiś tekst (albo ping, albo nazwa)
-        if line.strip():
-             count += 1
-             
-    # Ponieważ już liczymy na podstawie linii z zawartością, użyjemy tej wartości
-    # Wartość w polu embeda to ta, którą wylicza create_squad_embed
-    ping_count = len(re.findall(r'<@!?\d+>', members_list)) # Liczymy ile faktycznie jest pingów, by pokazać poprawną liczbę
-
+    
+    # Liczenie pingów, aby określić liczbę członków (to jest najbardziej precyzyjne)
+    ping_count = len(re.findall(r'<@!?\d+>', members_list)) 
+    
+    # Jeśli nie ma pingów, liczymy po prostu niepuste linie (dla początkowego tekstu)
+    if ping_count == 0:
+        count = len(member_lines)
+    else:
+        count = ping_count # Jeśli są pingi, używamy ich liczby
+        
     embed = discord.Embed(
         title=title, 
         description=f"Oto aktualny skład:\n\n{members_list}", 
@@ -309,9 +304,7 @@ def create_squad_embed(guild: discord.Guild, author_name: str, members_list: str
     )
     embed.set_thumbnail(url=LOGO_URL)
     
-    # Używamy poprawnego licznika opartego na pingach, jeśli są, lub na ilości linii, jeśli to czysty tekst
-    final_count = ping_count if ping_count > 0 else count
-    embed.add_field(name="Liczba członków:", value=f"**{final_count}**", inline=False)
+    embed.add_field(name="Liczba członków:", value=f"**{count}**", inline=False)
     
     embed.set_footer(text=f"Aktywowane przez {author_name}")
     return embed
@@ -321,12 +314,11 @@ class SquadModal(ui.Modal, title='Edytuj Skład'):
         super().__init__()
         self.message_id = message_id
         
-        # Przygotuj content do wyświetlenia w Modalu (usuń pingi, wstawiając nazwy członków)
-        # Zapisujemy tylko listę członków bez pingów dla łatwiejszej edycji
+        # <<< NAPRAWIONO BŁĄD HTTP 400: Optymalizacja danych w Modalu >>>
         editable_content = self._prepare_editable_content(current_content)
         
         self.list_input = ui.TextInput(
-            label='Lista członków (Wpisz nazwę/nick, np. 1- Kowalski)',
+            label='Lista (Wpisz nr-nazwa/nick, np. 1- Kowalski)',
             style=discord.TextStyle.paragraph,
             default=editable_content,
             required=True,
@@ -335,13 +327,15 @@ class SquadModal(ui.Modal, title='Edytuj Skład'):
         self.add_item(self.list_input)
         
     def _prepare_editable_content(self, content: str) -> str:
-        """Usuwa pingi z tekstu, zostawiając resztę do edycji."""
+        """Usuwa pingi i formatowanie z tekstu, zostawiając tylko numerację i nazwy/tekst."""
         lines = content.split('\n')
         new_lines = []
         for line in lines:
-            # Usuń pingi (np. <@123456789>)
-            line = re.sub(r'<@!?\d+>', '', line).strip()
-            # Dodaj z powrotem do listy
+            # 1. Usuń pingi (<@!123456789>)
+            line = re.sub(r'<@!?\d+>', '', line)
+            # 2. Usuń formatowanie (**display_name**)
+            line = re.sub(r'\s*\|\s*\*\*[^\*]+\*\*', '', line).strip()
+            
             if line:
                  new_lines.append(line)
         return "\n".join(new_lines) if new_lines else "1- [Wpisz osobę]\n2- [Wpisz osobę]"
@@ -353,49 +347,40 @@ class SquadModal(ui.Modal, title='Edytuj Skład'):
         final_lines = []
         guild = interaction.guild
 
-        # <<< MECHANIZM ZAMIANY NAZWY NA PING >>>
+        # <<< NAPRAWIONO MECHANIZM ZAMIANY NAZWY NA PING >>>
         for line in input_lines:
             line = line.strip()
             if not line:
                 continue
 
-            # Wyszukaj nazwy użytkowników (potencjalnie z @ lub #tag)
-            # Przykład: 1- @Kowalski 2- Anna#1234
-            match = re.search(r'(@?[\w\s.-]+#\d{4}|@?[\w\s.-]+)', line)
-            
+            # Sprawdź, czy linia już zawiera aktywny ping (np. jeśli ktoś go wkleił)
+            if re.search(r'<@!?\d+>', line):
+                final_lines.append(line)
+                continue
+
             # Wyszukaj prefiks (np. 1-, 2-, albo cokolwiek przed nazwą)
             prefix_match = re.match(r'(.+[-:.]\s*)', line)
             
-            member = None
             if prefix_match:
-                # Jeśli jest prefix, nazwa to reszta linii
                 name_to_search = line[prefix_match.end():].strip()
+                prefix = prefix_match.group(0)
             else:
-                 # Jeśli nie ma prefixu, cała linia to nazwa
                 name_to_search = line
+                prefix = ""
 
-            # Spróbuj znaleźć członka na serwerze
-            member = guild.get_member_named(name_to_search)
+            member = None
+            if name_to_search:
+                # Spróbuj znaleźć członka na serwerze po nazwie wyświetlanej lub nazwie użytkownika
+                member = guild.get_member_named(name_to_search)
 
             if member:
                 # Jeśli znaleziono, zamień na ping
                 ping = member.mention
-                
-                # Odtwórz linię, dodając ping zamiast wpisanej nazwy
-                if prefix_match:
-                    final_lines.append(f"{prefix_match.group(0)}{ping} | **{member.display_name}**")
-                else:
-                    final_lines.append(f"{ping} | **{member.display_name}**")
+                final_lines.append(f"{prefix}{ping} | **{member.display_name}**")
             else:
-                # Jeśli nie znaleziono (lub już jest ping), zostaw jak jest, ale usuń puste linie
-                # Sprawdzenie, czy to już nie jest ping (by go nie usuwać, gdyby ktoś go wkleił)
-                if not re.search(r'<@!?\d+>', line):
-                    # Jeśli nie znaleziono i nie jest to ping, dodaj jako zwykły tekst (np. nagłówek)
-                    final_lines.append(line)
-                else:
-                    final_lines.append(line)
-
-
+                # Jeśli nie znaleziono i nie jest to ping, dodaj jako zwykły tekst
+                final_lines.append(line)
+        
         new_members_list = "\n".join(final_lines)
         # <<< KONIEC MECHANIZMU ZAMIANY NAZWY NA PING >>>
 
@@ -451,7 +436,7 @@ class SquadView(ui.View):
             return
             
         # Pobieramy aktualną listę do wyświetlenia w Modalu
-        current_content = squad_data.get("members_list", "1- @...")
+        current_content = squad_data.get("members_list", "1- [Wpisz osobę]")
         
         # Uruchamiamy Modal
         await interaction.response.send_modal(SquadModal(self.message_id, current_content))
