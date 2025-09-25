@@ -369,7 +369,7 @@ class EditSquadView(ui.View):
         
         # Odświeżamy wiadomość
         if message and hasattr(message, 'edit'):
-            # Wysyłamy pierwotny widok z powrotem
+            # Wysyłamy pierwotny widok z powrotem, który teraz ma tylko przycisk Zarządzaj
             new_squad_view = SquadView(self.message_id, squad_data.get("role_id"))
             
             role_id = squad_data.get("role_id")
@@ -385,7 +385,7 @@ class EditSquadView(ui.View):
 
 
 class SquadView(ui.View):
-    """Główny widok składu z przyciskiem do przejścia do edycji."""
+    """Główny widok składu z przyciskiem do przejścia do edycji. Z usuniętym przyciskiem 'Dołącz'."""
     def __init__(self, message_id: int, role_id: int):
         super().__init__(timeout=None)
         self.message_id = message_id
@@ -413,34 +413,6 @@ class SquadView(ui.View):
             view=edit_view, 
             ephemeral=True
         )
-        
-    # POPRAWKA: Przycisk Dołącz zaimplementowany poprawnie
-    @ui.button(label="Dołącz", style=discord.ButtonStyle.green)
-    async def join(self, interaction: discord.Interaction, button: ui.Button):
-        # KLUCZOWA POPRAWKA: defer przy edycji głównej wiadomości
-        await interaction.response.defer() 
-        
-        squad = squads.get(self.message_id)
-        if not squad:
-            await interaction.followup.send("❌ Ten skład już nie istnieje.", ephemeral=True)
-            return
-
-        user_id = interaction.user.id
-        if user_id not in squad["member_ids"]:
-            squad["member_ids"].append(user_id)
-            
-            embed = create_squad_embed(
-                interaction.guild, 
-                squad["author_name"], 
-                squad["member_ids"], 
-                squad["message"].embeds[0].title
-            )
-            
-            await squad["message"].edit(embed=embed, view=self) 
-            
-            await interaction.followup.send("✅ Dołączyłeś do składu!", ephemeral=True)
-        else:
-            await interaction.followup.send("⚠️ Już jesteś w składzie!", ephemeral=True)
 
 # =======================================================
 # <<< KONIEC FUNKCJI DLA SQUADÓW >>>
