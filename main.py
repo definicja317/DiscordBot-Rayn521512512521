@@ -17,14 +17,14 @@ def home():
 
 # --- Token ---
 load_dotenv()
-# WAŻNE: Upewnij się, że masz ustawioną zmienną środowiskową DISCORD_BOT_TOKEN
-token = os.getenv("DISCORD_BOT_TOKEN") 
+token = os.getenv("DISCORD_BOT_TOKEN")
 if not token:
     print("Błąd: brak tokena Discord. Ustaw DISCORD_BOT_TOKEN w Render lub w .env")
     sys.exit(1)
 
 # --- Ustawienia ---
-PICK_ROLE_ID = 1413424476770664499 # Zmień na ID Twojej roli do pickowania graczy, jeśli inna
+# WAŻNE: Upewnij się, że rola PICK_ROLE_ID może wybrać graczy
+PICK_ROLE_ID = 1413424476770664499 
 STATUS_ADMINS = [1184620388425138183, 1409225386998501480, 1007732573063098378, 364869132526551050]   # <<< Wprowadź swoje ID Adminów >>>
 ADMIN_ROLES = STATUS_ADMINS # Używane do komend /wpisz-na-capt, /wypisz-z-capt, /create-squad
 ZANCUDO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414194392214011974/image.png"
@@ -42,7 +42,7 @@ tree = app_commands.CommandTree(client)
 captures = {}   
 airdrops = {}   
 events = {"zancudo": {}, "cayo": {}} 
-# NOWA PAMIĘĆ: {msg_id: {"role_id": int, "members_list": str, "message": discord.Message, "channel_id": int, "author_name": str}}
+# NOWA PAMIĘĆ: {msg_id: {"role_id": int, "members_list": str, "member_ids": [int], "message": discord.Message, "channel_id": int, "author_name": str}}
 squads = {}     
 
 # <<< ZARZĄDZANIE ZAPISAMI >>>
@@ -282,25 +282,28 @@ class CapturesView(ui.View):
 
 
 # =======================================================
-# <<< FUNKCJE DLA SQUADÓW >>>
+# <<< FUNKCJE DLA SQUADÓW (Z PICKOWANIEM) >>>
 # =======================================================
 
-def create_squad_embed(guild: discord.Guild, author_name: str, members_list: str = "Brak członków składu.", title: str = "Main Squad"):
-    """Tworzy embed dla Squadu. POPRAWIONY BŁĄD KOLORU."""
-    member_lines = [line for line in members_list.split('\n') if line.strip()]
+def create_squad_embed(guild: discord.Guild, author_name: str, member_ids: list[int], title: str = "Main Squad"):
+    """Tworzy embed dla Squadu na podstawie listy ID."""
     
-    # Liczenie pingów
-    ping_count = len(re.findall(r'<@!?\d+>', members_list)) 
+    member_lines = []
     
-    if ping_count == 0:
-        count = len(member_lines)
-    else:
-        count = ping_count
+    for i, uid in enumerate(member_ids):
+        member = guild.get_member(uid)
+        if member:
+            member_lines.append(f"{i+1}- {member.mention} | **{member.display_name}**")
+        else:
+            member_lines.append(f"{i+1}- <@{uid}> (Użytkownik opuścił serwer)")
+            
+    members_list_str = "\n".join(member_lines)
+    count = len(member_ids)
         
     embed = discord.Embed(
         title=title, 
-        description=f"Oto aktualny skład:\n\n{members_list}", 
-        color=discord.Color(0xFFFFFF) # POPRAWIONE: Zmieniono .white() na Color(0xFFFFFF)
+        description=f"Oto aktualny skład:\n\n{members_list_str}", 
+        color=discord.Color(0xFFFFFF)
     )
     embed.set_thumbnail(url=LOGO_URL)
     
@@ -309,131 +312,105 @@ def create_squad_embed(guild: discord.Guild, author_name: str, members_list: str
     embed.set_footer(text=f"Aktywowane przez {author_name}")
     return embed
 
-class SquadModal(ui.Modal, title='Edytuj Skład'):
-    """MODAL DO EDYCJI SKŁADU. POPRAWIONY BŁĄD ETYKIETY I LOGIKI PRZETWARZANIA ID."""
-    def __init__(self, message_id: int, current_content: str):
-        super().__init__()
+
+class SquadMemberSelectMenu(ui.Select):
+    """Dropdown menu, które pozwala wybrać WSZYSTKICH członków serwera, którzy będą w składzie."""
+    def __init__(self, initial_member_ids: list[int], guild: discord.Guild):
+        # Pobieramy wszystkich członków serwera (z wyjątkiem botów, jeśli chcesz)
+        # UWAGA: Lista może być bardzo długa! Discord limituje SelectMenu do 25 opcji.
+        # W TYM CELU UŻYWAMY SPECJALNEGO TYPU SELECT MENUA, KTÓRY POZWALA WYBRAĆ DOWOLNYCH UŻYTKOWNIKÓW Z SERWERA!
+        
+        # Tworzymy placeholder
+        if initial_member_ids:
+             placeholder = f"Aktualnie wybrano: {len(initial_member_ids)} osób. Kliknij, aby edytować."
+        else:
+             placeholder = "Wybierz członków składu (możesz wybrać do 25 osób)."
+             
+        super().__init__(
+            placeholder=placeholder,
+            max_values=25, # Maksymalnie 25 osób w jednym wybieraniu
+            custom_id="squad_member_picker",
+            options=[] # Opcje będą generowane przez Discorda dynamicznie
+        )
+        # Zmieniamy to na typ UserSelect, który jest automatycznie uzupełniany przez Discorda
+        self.type = discord.ComponentType.user_select
+
+    async def callback(self, interaction: discord.Interaction):
+        # Callback jest tylko, aby interakcja nie wygasła
+        await interaction.response.defer()
+        pass
+
+
+class EditSquadView(ui.View):
+    """Widok zawierający menu wyboru użytkowników i przycisk Potwierdź edycję."""
+    def __init__(self, message_id: int):
+        super().__init__(timeout=180)
         self.message_id = message_id
         
-        editable_content = self._prepare_editable_content(current_content)
+        # Pobieramy aktualne ID członków składu
+        initial_member_ids = squads.get(self.message_id, {}).get("member_ids", [])
         
-        # POPRAWIONE: Skrócono etykietę do mniej niż 45 znaków (błąd HTTP 400)
-        self.list_input = ui.TextInput(
-            label='Lista (nr-ID/nick, np. 1- 1234567890)', 
-            style=discord.TextStyle.paragraph,
-            default=editable_content,
-            required=True,
-            max_length=4000
-        )
-        self.add_item(self.list_input)
+        # Dodajemy UserSelect, który pozwala wybrać do 25 osób jednocześnie
+        self.add_item(SquadMemberSelectMenu(initial_member_ids, None))
+
+    @ui.button(label="✅ Potwierdź edycję", style=discord.ButtonStyle.green)
+    async def confirm_edit(self, interaction: discord.Interaction, button: ui.Button):
+        select_menu = next((item for item in self.children if item.custom_id == "squad_member_picker"), None)
         
-    def _prepare_editable_content(self, content: str) -> str:
-        """Usuwa pingi i formatowanie z tekstu, zostawiając tylko numerację i nazwy/tekst."""
-        lines = content.split('\n')
-        new_lines = []
-        for line in lines:
-            # 1. Usuń pingi (<@!123456789>)
-            line = re.sub(r'<@!?\d+>', '', line)
-            # 2. Usuń formatowanie (**display_name**)
-            line = re.sub(r'\s*\|\s*\*\*[^\*]+\*\*', '', line).strip()
-            
-            if line:
-                 new_lines.append(line)
-        return "\n".join(new_lines) if new_lines else "1- [Wpisz ID lub nazwę]\n2- [Wpisz ID lub nazwę]"
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-
-        input_lines = self.list_input.value.split('\n')
-        final_lines = []
-        guild = interaction.guild
-
-        for line in input_lines:
-            line = line.strip()
-            if not line:
-                continue
-
-            # Sprawdź, czy linia już zawiera aktywny ping 
-            if re.search(r'<@!?\d+>', line):
-                final_lines.append(line)
-                continue
-
-            # Wyszukaj prefiks (np. 1-, 2-, albo cokolwiek przed nazwą)
-            prefix_match = re.match(r'(.+[-:.]\s*)', line)
-            
-            if prefix_match:
-                name_or_id_to_search = line[prefix_match.end():].strip()
-                prefix = prefix_match.group(0)
-            else:
-                name_or_id_to_search = line
-                prefix = ""
-                
-            if not name_or_id_to_search:
-                 name_or_id_to_search = line
-
-            member = None
-            if name_or_id_to_search:
-                
-                # POPRAWIONA LOGIKA: 1. Priorytetowo sprawdzamy, czy to jest samo ID 
-                if name_or_id_to_search.isdigit() and len(name_or_id_to_search) > 10:
-                    try:
-                        member_id = int(name_or_id_to_search)
-                        member = guild.get_member(member_id)
-                    except ValueError:
-                        pass 
-                        
-                # 2. Jeśli nie znaleziono jako ID, próbujemy znaleźć po nazwie/tagu
-                if member is None:
-                    member = guild.get_member_named(name_or_id_to_search)
-
-            if member:
-                # Jeśli znaleziono, zamień na ping
-                ping = member.mention
-                final_lines.append(f"{prefix}{ping} | **{member.display_name}**")
-            else:
-                # Jeśli nie znaleziono, dodaj jako zwykły tekst
-                final_lines.append(line)
+        if not select_menu or not select_menu.values:
+            # Jeśli nic nie wybrano, lista jest pusta
+            selected_members = []
+        else:
+            # W UserSelect wartościami są obiekty Member/User
+            selected_members = select_menu.values 
         
-        new_members_list = "\n".join(final_lines)
-
+        # Konwertujemy wybrane obiekty Member na listę ID
+        new_member_ids = [member.id for member in selected_members]
+        
         squad_data = squads.get(self.message_id)
 
         if not squad_data:
-            await interaction.followup.send("Błąd: Nie znaleziono danych tego składu.", ephemeral=True)
+            await interaction.response.send_message("Błąd: Nie znaleziono danych tego składu.", ephemeral=True)
             return
 
-        # Aktualizujemy listę członków w pamięci
-        squad_data["members_list"] = new_members_list
+        # Aktualizujemy listę ID członków w pamięci
+        squad_data["member_ids"] = new_member_ids
         
         # Odtwarzamy embed
         message = squad_data.get("message")
         author_name = squad_data.get("author_name", "Bot")
-        
         title = "Main Squad"
         if message and message.embeds:
             title = message.embeds[0].title
             
-        new_embed = create_squad_embed(interaction.guild, author_name, new_members_list, title)
+        new_embed = create_squad_embed(interaction.guild, author_name, new_member_ids, title)
         
         # Odświeżamy wiadomość
         if message and hasattr(message, 'edit'):
-            new_view = SquadView(self.message_id, squad_data.get("role_id"))
+            # Odtwarzamy widok główny SquadView
+            new_squad_view = SquadView(self.message_id, squad_data.get("role_id"))
             
+            # Wysłanie pingu na początku zawartości
             role_id = squad_data.get("role_id")
             content = f"<@&{role_id}> **Zaktualizowano Skład!**" if role_id else ""
             
-            await message.edit(content=content, embed=new_embed, view=new_view)
-            await interaction.followup.send("✅ Skład został pomyślnie zaktualizowany! Wprowadzone ID i nazwy zostały przekształcone na pingi.", ephemeral=True)
+            await message.edit(content=content, embed=new_embed, view=new_squad_view)
+            
+            # Usuwamy widok Edycji
+            await interaction.response.edit_message(content="✅ Skład został pomyślnie zaktualizowany! Wróć do głównej wiadomości składu.", view=None)
         else:
-            await interaction.followup.send("Błąd: Nie można odświeżyć wiadomości składu.", ephemeral=True)
+            await interaction.response.edit_message(content="Błąd: Nie można odświeżyć wiadomości składu.", view=None)
+
 
 class SquadView(ui.View):
+    """Główny widok składu z przyciskiem do przejścia do edycji."""
     def __init__(self, message_id: int, role_id: int):
         super().__init__(timeout=None)
         self.message_id = message_id
         self.role_id = role_id
 
-    @ui.button(label="Zarządzaj składem (ADMIN)", style=discord.ButtonStyle.blurple)
+    # Zastępujemy modal przyciskiem do interaktywnej edycji
+    @ui.button(label="Edytuj listę (ADMIN)", style=discord.ButtonStyle.blurple)
     async def manage_squad_button(self, interaction: discord.Interaction, button: ui.Button):
         if interaction.user.id not in ADMIN_ROLES:
             await interaction.response.send_message("⛔ Brak uprawnień do zarządzania składem!", ephemeral=True)
@@ -444,10 +421,13 @@ class SquadView(ui.View):
             await interaction.response.send_message("Błąd: Nie znaleziono danych tego składu.", ephemeral=True)
             return
             
-        current_content = squad_data.get("members_list", "1- [Wpisz ID lub nazwę]")
-        
-        # Uruchamiamy Modal
-        await interaction.response.send_modal(SquadModal(self.message_id, current_content))
+        edit_view = EditSquadView(self.message_id)
+            
+        await interaction.response.send_message(
+            "Wybierz listę członków (możesz wybrać do 25 osób jednocześnie):", 
+            view=edit_view, 
+            ephemeral=True
+        )
 
 # =======================================================
 # <<< KONIEC FUNKCJI DLA SQUADÓW >>>
@@ -459,6 +439,18 @@ class SquadView(ui.View):
 # =====================
 @client.event
 async def on_ready():
+    # Sprawdzanie i próba przywrócenia widoków dla aktywnych wiadomości (w przypadku restartu)
+    if squads:
+        print(f"Próba przywrócenia {len(squads)} widoków Squad.")
+        for msg_id, data in squads.items():
+             try:
+                 client.add_view(SquadView(msg_id, data["role_id"]))
+             except Exception as e:
+                 print(f"Błąd przy przywracaniu widoku Squad {msg_id}: {e}")
+                 
+    # Przywracanie widoków Captures (jeśli konieczne) - zakładam, że tego jeszcze nie ma
+    # ...
+
     await tree.sync()
     print(f"✅ Zalogowano jako {client.user}")
 
@@ -475,8 +467,8 @@ async def create_squad(interaction: discord.Interaction, rola: discord.Role, tyt
     role_id = rola.id
     
     # 1. Tworzymy początkowy embed i view
-    initial_members = "1- [Wpisz ID lub nazwę]\n2- [Wpisz ID lub nazwę]\n3- [Wpisz ID lub nazwę]"
-    embed = create_squad_embed(interaction.guild, author_name, initial_members, tytul)
+    initial_member_ids = []
+    embed = create_squad_embed(interaction.guild, author_name, initial_member_ids, tytul)
     view = SquadView(0, role_id)
     
     # 2. Wysyłamy wiadomość z pingiem
@@ -486,7 +478,7 @@ async def create_squad(interaction: discord.Interaction, rola: discord.Role, tyt
     # 3. Zapisujemy do pamięci
     squads[sent.id] = {
         "role_id": role_id, 
-        "members_list": initial_members, 
+        "member_ids": initial_member_ids, 
         "message": sent, 
         "channel_id": sent.channel.id,
         "author_name": author_name,
@@ -565,8 +557,8 @@ async def list_all(interaction: discord.Interaction):
         desc += f"\n**{name} (msg {mid})**: {len(data['participants'])} osób"
         
     for mid, data in squads.items():
-        count = len([line for line in data['members_list'].split('\n') if line.strip()])
-        desc += f"\n**Squad (msg {mid})**: {count} osób (zarządzane ręcznie)"
+        count = len(data.get('member_ids', []))
+        desc += f"\n**Squad (msg {mid})**: {count} osób"
 
     if not desc:
         desc = "Brak aktywnych zapisów i składów."
@@ -593,10 +585,10 @@ async def set_status(interaction: discord.Interaction, status: str, opis_aktywno
     
     # Mapowanie typów aktywności
     activity_type_map = {
-        "gra": discord.ActivityType.playing,    # Gra w...
-        "slucha": discord.ActivityType.listening, # Słucha...
-        "patrzy": discord.ActivityType.watching,   # Ogląda...
-        "stream": discord.ActivityType.streaming,  # Streamuje...
+        "gra": discord.ActivityType.playing,    
+        "slucha": discord.ActivityType.listening, 
+        "patrzy": discord.ActivityType.watching,   
+        "stream": discord.ActivityType.streaming,  
     }
 
     if status.lower() not in status_map:
@@ -605,13 +597,12 @@ async def set_status(interaction: discord.Interaction, status: str, opis_aktywno
         
     activity = None
     if opis_aktywnosci:
-        activity_type = discord.ActivityType.playing # Domyślnie "Gra"
+        activity_type = discord.ActivityType.playing 
         
         if typ_aktywnosci and typ_aktywnosci.lower() in activity_type_map:
             activity_type = activity_type_map[typ_aktywnosci.lower()]
 
         if activity_type == discord.ActivityType.streaming:
-            # Dla streamingu wymagany jest link i typ musi być ustawiony na streaming
             if not url_stream or not (url_stream.startswith('http://') or url_stream.startswith('https://')):
                 await interaction.response.send_message("⚠️ Aby ustawić 'stream', musisz podać poprawny link (URL) do streamu w argumencie `url_stream`!", ephemeral=True)
                 return
@@ -622,7 +613,6 @@ async def set_status(interaction: discord.Interaction, status: str, opis_aktywno
                 url=url_stream
             )
         else:
-            # Dla pozostałych typów
             activity = discord.Activity(
                 name=opis_aktywnosci,
                 type=activity_type
@@ -711,7 +701,6 @@ class RemoveEnrollmentView(ui.View):
                  await message.edit(embed=new_embed, view=view_obj)
             elif type_str in events:
                  events[type_str][msg_id]["participants"] = participants
-                 # W eventach (zancudo/cayo) nie ma interaktywnych przycisków
 
         await interaction.response.edit_message(
             content=f"✅ Pomyślnie wypisano **{self.member_to_remove.display_name}** z **{type_str.capitalize()}** (ID: `{msg_id}`).", 
@@ -824,7 +813,6 @@ async def add_to_enrollment(interaction: discord.Interaction, członek: discord.
 def run_discord_bot():
     client.run(token)
 
-# Uruchomienie bota i serwera Flask (Render)
 threading.Thread(target=run_discord_bot).start()
 
 if __name__ == "__main__":
