@@ -23,8 +23,8 @@ if not token:
     sys.exit(1)
 
 # --- Ustawienia ---
-PICK_ROLE_ID = 1413424476770664499 
-STATUS_ADMINS = [1184620388425138183, 1409225386998501480, 1007732573063098378, 364869132526551050]   # <<< Wprowadź swoje ID Adminów >>>
+PICK_ROLE_ID = 1413424476770664499 # Zmień na faktyczne ID
+STATUS_ADMINS = [1184620388425138183, 1409225386998501480, 1007732573063098378, 364869132526551050] # Zmień na faktyczne ID
 ADMIN_ROLES = STATUS_ADMINS 
 ZANCUDO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414194392214011974/image.png"
 CAYO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414204332747915274/image.png"
@@ -40,7 +40,6 @@ tree = app_commands.CommandTree(client)
 captures = {}   
 airdrops = {}   
 events = {"zancudo": {}, "cayo": {}} 
-# Zmieniona struktura dla Squadów (używa ID dla lepszej kompatybilności z interaktywnym pickowaniem)
 squads = {}     
 
 # <<< ZARZĄDZANIE ZAPISAMI >>>
@@ -79,9 +78,8 @@ class EnrollmentSelectMenu(ui.Select):
 # <<< KONIEC ZARZĄDZANIE ZAPISAMI >>>
 
 # =====================
-#       AIRDROP & CAPTURES VIEWS (BEZ ZMIAN)
+#       AIRDROP & CAPTURES VIEWS
 # =====================
-# ... (Kod dla AirdropView, PlayerSelectMenu, PickPlayersView, CapturesView - bez zmian)
 class AirdropView(ui.View):
     def __init__(self, message_id: int, description: str, voice_channel: discord.VoiceChannel, author_name: str):
         super().__init__(timeout=None)
@@ -92,6 +90,7 @@ class AirdropView(ui.View):
         self.author_name = author_name
 
     def make_embed(self, guild: discord.Guild):
+        # POPRAWKA KOLORU: używamy 0xFFFFFF (biały)
         embed = discord.Embed(title="🎁 AirDrop!", description=self.description, color=discord.Color(0xFFFFFF))
         embed.set_thumbnail(url=LOGO_URL)
         embed.add_field(name="Kanał głosowy:", value=f"🔊 {self.voice_channel.mention}", inline=False)
@@ -174,6 +173,7 @@ class PickPlayersView(ui.View):
             for mid in selected_values if interaction.guild.get_member(int(mid))
         ]
         total_participants = len(captures.get(self.capture_id, {}).get("participants", []))
+        # POPRAWKA KOLORU: używamy 0xFFFFFF (biały)
         final_embed = discord.Embed(
             title="Lista osób na captures!",
             description=f"Wybrano {len(selected_members)}/{total_participants} osób:",
@@ -196,6 +196,7 @@ class CapturesView(ui.View):
     def make_embed(self, guild: discord.Guild):
         participants_ids = captures.get(self.capture_id, {}).get("participants", [])
         
+        # POPRAWKA KOLORU: używamy 0xFFFFFF (biały)
         embed = discord.Embed(title="CAPTURES!", description="Kliknij przycisk, aby się zapisać!", color=discord.Color(0xFFFFFF))
         embed.set_thumbnail(url=LOGO_URL) 
         
@@ -260,16 +261,19 @@ def create_squad_embed(guild: discord.Guild, author_name: str, member_ids: list[
     
     member_lines = []
     
+    # Maksymalna liczba członków do wyświetlenia (Discord ma limit 1024 znaki na pole)
+    # Wyświetlamy max 25, jak w UserSelect.
     for i, uid in enumerate(member_ids):
         member = guild.get_member(uid)
         if member:
             member_lines.append(f"{i+1}- {member.mention} | **{member.display_name}**")
         else:
-            member_lines.append(f"{i+1}- <@{uid}> (Użytkownik opuścił serwer)")
+            member_lines.append(f"{i+1}- <@{uid}> (Nieznany/Opuścił serwer)")
             
     members_list_str = "\n".join(member_lines) if member_lines else "Brak członków składu."
     count = len(member_ids)
         
+    # POPRAWKA KOLORU: używamy 0xFFFFFF (biały)
     embed = discord.Embed(
         title=title, 
         description=f"Oto aktualny skład:\n\n{members_list_str}", 
@@ -283,47 +287,37 @@ def create_squad_embed(guild: discord.Guild, author_name: str, member_ids: list[
     return embed
 
 
-# Klasa SquadMemberSelectMenu nie potrzebuje już implementacji,
-# ponieważ UserSelect (typ) jest obsługiwany przez Discorda.
-
 class EditSquadView(ui.View):
-    """Widok zawierający menu wyboru użytkowników i przycisk Potwierdź edycję."""
+    """Widok zawierający menu wyboru użytkowników i przycisk Potwierdź edycję. Zastępuje stary modal."""
     def __init__(self, message_id: int):
         super().__init__(timeout=180)
         self.message_id = message_id
         
-        # Tworzenie UserSelect (wybieracz użytkowników)
+        # UserSelect (wybieracz użytkowników)
         self.add_item(ui.UserSelect(
             placeholder="Wybierz członków składu (max 25)",
             max_values=25, 
             custom_id="squad_member_picker"
         ))
-        # Ustawienie początkowej wartości - nie jest wymagane, ale ułatwia podgląd
-        # Chociaż dla UserSelect initial_values wymaga ręcznego patchowania API (pomijamy dla uproszczenia)
 
     @ui.button(label="✅ Potwierdź edycję", style=discord.ButtonStyle.green)
     async def confirm_edit(self, interaction: discord.Interaction, button: ui.Button):
-        # W UserSelect wartością są obiekty Member/User
-        selected_members = interaction.data.get("values", [])
+        # KLUCZOWA POPRAWKA: Odroczenie interakcji!
+        await interaction.response.defer(ephemeral=True)
+
+        # Pobieramy wybrany UserSelect
+        select_menu = next((item for item in self.children if item.custom_id == "squad_member_picker"), None)
         
-        # W UserSelect, wartości są przekazywane bezpośrednio jako ID użytkowników.
-        # W starszych wersjach discord.py (lub jeśli używasz niestandardowego selecta), 
-        # trzeba byłoby odzyskać obiekt. W nowej wersji `ui.UserSelect` są to ID:
-        
-        # Musimy odzyskać obiekty Member/User z interaction.data lub użyć `interaction.data.resolved`
+        # Jeśli UserSelect istnieje i ma wartości, to są to ID użytkowników (str)
+        # UWAGA: UserSelect zwraca ID w `select_menu.values` (str) i obiekty w `interaction.data.resolved['users']`
         selected_ids = []
-        if interaction.data.get('resolved', {}).get('users'):
-             # Jeśli użytkownik wybrał kogoś, `resolved` zawiera mapę ID -> User Object
-             # Wartości w `select_menu.values` to klucze (ID)
-             select_menu = next((item for item in self.children if item.custom_id == "squad_member_picker"), None)
-             if select_menu and select_menu.values:
-                 selected_ids = [int(uid) for uid in select_menu.values]
-
-
+        if select_menu and select_menu.values:
+            selected_ids = [int(uid) for uid in select_menu.values]
+        
         squad_data = squads.get(self.message_id)
 
         if not squad_data:
-            await interaction.response.send_message("Błąd: Nie znaleziono danych tego składu.", ephemeral=True)
+            await interaction.followup.send("Błąd: Nie znaleziono danych tego składu.", ephemeral=True)
             return
 
         # Aktualizujemy listę ID członków w pamięci
@@ -347,10 +341,10 @@ class EditSquadView(ui.View):
             
             await message.edit(content=content, embed=new_embed, view=new_squad_view)
             
-            # Usuwamy widok Edycji
-            await interaction.response.edit_message(content="✅ Skład został pomyślnie zaktualizowany! Wróć do głównej wiadomości składu.", view=None)
+            # Odpowiedź po pomyślnej edycji
+            await interaction.followup.send(content="✅ Skład został pomyślnie zaktualizowany! Wróć do głównej wiadomości składu.", ephemeral=True)
         else:
-            await interaction.response.edit_message(content="Błąd: Nie można odświeżyć wiadomości składu.", view=None)
+            await interaction.followup.send(content="Błąd: Nie można odświeżyć wiadomości składu.", ephemeral=True)
 
 
 class SquadView(ui.View):
@@ -360,9 +354,10 @@ class SquadView(ui.View):
         self.message_id = message_id
         self.role_id = role_id
 
-    @ui.button(label="Edytuj listę (ADMIN)", style=discord.ButtonStyle.blurple)
+    @ui.button(label="Zarządzaj składem (ADMIN)", style=discord.ButtonStyle.blurple)
     async def manage_squad_button(self, interaction: discord.Interaction, button: ui.Button):
-        # KLUCZOWA POPRAWKA: ODROCZENIE INTERAKCJI DLA ZAPOBIEGANIA BŁĘDOWI 404/10062
+        # KLUCZOWA POPRAWKA: Odroczenie interakcji! Zapobiega błędom 404/10062.
+        # Jest to konieczne, ponieważ wysłanie nowego View/Wiadomości zajmuje czas.
         await interaction.response.defer(ephemeral=True) 
 
         if interaction.user.id not in ADMIN_ROLES:
@@ -375,9 +370,10 @@ class SquadView(ui.View):
             return
             
         edit_view = EditSquadView(self.message_id)
-            
+        
+        # Zamiast Modala wysyłamy teraz EditSquadView z UserSelect
         await interaction.followup.send(
-            "Wybierz listę członków (możesz wybrać do 25 osób jednocześnie):", 
+            "Wybierz listę członków składu (użyj menu rozwijanego, max 25 osób). Po wybraniu naciśnij 'Potwierdź edycję':", 
             view=edit_view, 
             ephemeral=True
         )
@@ -392,6 +388,7 @@ class SquadView(ui.View):
 # =====================
 @client.event
 async def on_ready():
+    # Przywracanie widoków
     if squads:
         print(f"Próba przywrócenia {len(squads)} widoków Squad.")
         for msg_id, data in squads.items():
@@ -400,13 +397,14 @@ async def on_ready():
              except Exception as e:
                  print(f"Błąd przy przywracaniu widoku Squad {msg_id}: {e}")
                  
+    # Synchronizacja komend
     await tree.sync()
     print(f"✅ Zalogowano jako {client.user}")
 
-# Nowa komenda SQUAD
+# Komenda SQUAD
 @tree.command(name="create-squad", description="Tworzy ogłoszenie o składzie z możliwością edycji.")
 async def create_squad(interaction: discord.Interaction, rola: discord.Role, tytul: str = "Main Squad"):
-    # KLUCZOWA POPRAWKA: ODROCZENIE INTERAKCJI DLA ZAPOBIEGANIA BŁĘDOWI 404/10062
+    # KLUCZOWA POPRAWKA: Odroczenie interakcji! Zapobiega błędom 404/10062.
     await interaction.response.defer(ephemeral=True) 
 
     if interaction.user.id not in ADMIN_ROLES:
@@ -417,12 +415,14 @@ async def create_squad(interaction: discord.Interaction, rola: discord.Role, tyt
     role_id = rola.id
     
     initial_member_ids = []
-    embed = create_squad_embed(interaction.guild, author_name, initial_member_ids, tytul)
+    # POPRAWKA KOLORU: używa poprawionej funkcji
+    embed = create_squad_embed(interaction.guild, author_name, initial_member_ids, tytul) 
     view = SquadView(0, role_id)
     
     content = f"{rola.mention}"
     sent = await interaction.channel.send(content=content, embed=embed, view=view)
     
+    # Zapisanie danych składu
     squads[sent.id] = {
         "role_id": role_id, 
         "member_ids": initial_member_ids, 
@@ -431,13 +431,12 @@ async def create_squad(interaction: discord.Interaction, rola: discord.Role, tyt
         "author_name": author_name,
     }
     
+    # Aktualizacja View z poprawnym ID wiadomości
     view.message_id = sent.id
     await sent.edit(view=view) 
     
     await interaction.followup.send(f"✅ Ogłoszenie o składzie '{tytul}' dla roli {rola.mention} wysłane!", ephemeral=True)
 
-
-# ... (Pozostałe komendy bez zmian)
 
 # Captures
 @tree.command(name="create-capt", description="Tworzy ogłoszenie o captures.")
