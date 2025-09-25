@@ -300,6 +300,7 @@ def create_squad_embed(guild: discord.Guild, author_name: str, members_list: str
     embed = discord.Embed(
         title=title, 
         description=f"Oto aktualny skład:\n\n{members_list}", 
+        # POPRAWKA BŁĘDU: Zmieniono .white() na Color(0xFFFFFF)
         color=discord.Color(0xFFFFFF) 
     )
     embed.set_thumbnail(url=LOGO_URL)
@@ -317,8 +318,9 @@ class SquadModal(ui.Modal, title='Edytuj Skład'):
         # Optymalizacja danych w Modalu
         editable_content = self._prepare_editable_content(current_content)
         
+        # POPRAWKA BŁĘDU HTTP 400: Etykieta musi mieć <= 45 znaków
         self.list_input = ui.TextInput(
-            label='Lista (Wpisz nr-ID/nazwa/nick, np. 1- 1234567890)',
+            label='Lista (nr-ID/nick, np. 1- 1234567890)', # Skrócono etykietę
             style=discord.TextStyle.paragraph,
             default=editable_content,
             required=True,
@@ -370,7 +372,7 @@ class SquadModal(ui.Modal, title='Edytuj Skład'):
             member = None
             if name_or_id_to_search:
                 
-                # <<< NOWA LOGIKA: Sprawdź, czy to jest ID >>>
+                # NOWA LOGIKA: Sprawdź, czy to jest ID
                 if name_or_id_to_search.isdigit():
                     try:
                         member_id = int(name_or_id_to_search)
@@ -378,7 +380,7 @@ class SquadModal(ui.Modal, title='Edytuj Skład'):
                     except ValueError:
                         pass # To nie był poprawny numer
                         
-                # <<< STARA LOGIKA: Jeśli nie ID, spróbuj znaleźć po nazwie/tagu >>>
+                # STARA LOGIKA: Jeśli nie ID, spróbuj znaleźć po nazwie/tagu
                 if member is None:
                     member = guild.get_member_named(name_or_id_to_search)
 
