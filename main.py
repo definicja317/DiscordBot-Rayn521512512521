@@ -17,14 +17,15 @@ def home():
 
 # --- Token ---
 load_dotenv()
-token = os.getenv("DISCORD_BOT_TOKEN")
+# WAŻNE: Upewnij się, że masz ustawioną zmienną środowiskową DISCORD_BOT_TOKEN
+token = os.getenv("DISCORD_BOT_TOKEN") 
 if not token:
     print("Błąd: brak tokena Discord. Ustaw DISCORD_BOT_TOKEN w Render lub w .env")
     sys.exit(1)
 
 # --- Ustawienia ---
-PICK_ROLE_ID = 1413424476770664499
-STATUS_ADMINS = [1184620388425138183, 1409225386998501480, 1007732573063098378, 364869132526551050]   # <<< wpisz swoje ID
+PICK_ROLE_ID = 1413424476770664499 # Zmień na ID Twojej roli do pickowania graczy, jeśli inna
+STATUS_ADMINS = [1184620388425138183, 1409225386998501480, 1007732573063098378, 364869132526551050]   # <<< Wprowadź swoje ID Adminów >>>
 ADMIN_ROLES = STATUS_ADMINS # Używane do komend /wpisz-na-capt, /wypisz-z-capt, /create-squad
 ZANCUDO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414194392214011974/image.png"
 CAYO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414204332747915274/image.png"
@@ -81,7 +82,7 @@ class EnrollmentSelectMenu(ui.Select):
             )
 
         super().__init__(
-            placeholder=f"Wybierz zapis, z którego usunąć/do którego dodać osobę:",
+            placeholder=f"Wybierz zapis:",
             max_values=1,
             min_values=1,
             options=options
@@ -285,17 +286,16 @@ class CapturesView(ui.View):
 # =======================================================
 
 def create_squad_embed(guild: discord.Guild, author_name: str, members_list: str = "Brak członków składu.", title: str = "Main Squad"):
-    """Tworzy embed dla Squadu."""
+    """Tworzy embed dla Squadu. POPRAWIONY BŁĄD KOLORU."""
     member_lines = [line for line in members_list.split('\n') if line.strip()]
     
-    # Liczenie pingów, aby określić liczbę członków (to jest najbardziej precyzyjne)
+    # Liczenie pingów
     ping_count = len(re.findall(r'<@!?\d+>', members_list)) 
     
-    # Jeśli nie ma pingów, liczymy po prostu niepuste linie (dla początkowego tekstu)
     if ping_count == 0:
         count = len(member_lines)
     else:
-        count = ping_count # Jeśli są pingi, używamy ich liczby
+        count = ping_count
         
     embed = discord.Embed(
         title=title, 
@@ -310,14 +310,14 @@ def create_squad_embed(guild: discord.Guild, author_name: str, members_list: str
     return embed
 
 class SquadModal(ui.Modal, title='Edytuj Skład'):
+    """MODAL DO EDYCJI SKŁADU. POPRAWIONY BŁĄD ETYKIETY I LOGIKI PRZETWARZANIA ID."""
     def __init__(self, message_id: int, current_content: str):
         super().__init__()
         self.message_id = message_id
         
-        # Optymalizacja danych w Modalu
         editable_content = self._prepare_editable_content(current_content)
         
-        # POPRAWIONE: Skrócono etykietę do mniej niż 45 znaków
+        # POPRAWIONE: Skrócono etykietę do mniej niż 45 znaków (błąd HTTP 400)
         self.list_input = ui.TextInput(
             label='Lista (nr-ID/nick, np. 1- 1234567890)', 
             style=discord.TextStyle.paragraph,
@@ -353,7 +353,7 @@ class SquadModal(ui.Modal, title='Edytuj Skład'):
             if not line:
                 continue
 
-            # Sprawdź, czy linia już zawiera aktywny ping (np. jeśli ktoś go wkleił)
+            # Sprawdź, czy linia już zawiera aktywny ping 
             if re.search(r'<@!?\d+>', line):
                 final_lines.append(line)
                 continue
@@ -367,19 +367,22 @@ class SquadModal(ui.Modal, title='Edytuj Skład'):
             else:
                 name_or_id_to_search = line
                 prefix = ""
+                
+            if not name_or_id_to_search:
+                 name_or_id_to_search = line
 
             member = None
             if name_or_id_to_search:
                 
-                # LOGIKA: Sprawdź, czy to jest ID
-                if name_or_id_to_search.isdigit():
+                # POPRAWIONA LOGIKA: 1. Priorytetowo sprawdzamy, czy to jest samo ID 
+                if name_or_id_to_search.isdigit() and len(name_or_id_to_search) > 10:
                     try:
                         member_id = int(name_or_id_to_search)
                         member = guild.get_member(member_id)
                     except ValueError:
-                        pass
+                        pass 
                         
-                # LOGIKA: Jeśli nie ID, spróbuj znaleźć po nazwie/tagu
+                # 2. Jeśli nie znaleziono jako ID, próbujemy znaleźć po nazwie/tagu
                 if member is None:
                     member = guild.get_member_named(name_or_id_to_search)
 
@@ -406,7 +409,6 @@ class SquadModal(ui.Modal, title='Edytuj Skład'):
         message = squad_data.get("message")
         author_name = squad_data.get("author_name", "Bot")
         
-        # Używamy tytułu z wiadomości lub fallback
         title = "Main Squad"
         if message and message.embeds:
             title = message.embeds[0].title
@@ -415,10 +417,8 @@ class SquadModal(ui.Modal, title='Edytuj Skład'):
         
         # Odświeżamy wiadomość
         if message and hasattr(message, 'edit'):
-            # Odtwarzamy widok, by był spójny
             new_view = SquadView(self.message_id, squad_data.get("role_id"))
             
-            # Wysłanie pingu na początku zawartości
             role_id = squad_data.get("role_id")
             content = f"<@&{role_id}> **Zaktualizowano Skład!**" if role_id else ""
             
@@ -444,7 +444,6 @@ class SquadView(ui.View):
             await interaction.response.send_message("Błąd: Nie znaleziono danych tego składu.", ephemeral=True)
             return
             
-        # Pobieramy aktualną listę do wyświetlenia w Modalu
         current_content = squad_data.get("members_list", "1- [Wpisz ID lub nazwę]")
         
         # Uruchamiamy Modal
@@ -713,7 +712,6 @@ class RemoveEnrollmentView(ui.View):
             elif type_str in events:
                  events[type_str][msg_id]["participants"] = participants
                  # W eventach (zancudo/cayo) nie ma interaktywnych przycisków
-                 # Wystarczy odświeżyć wewnętrzną listę participants
 
         await interaction.response.edit_message(
             content=f"✅ Pomyślnie wypisano **{self.member_to_remove.display_name}** z **{type_str.capitalize()}** (ID: `{msg_id}`).", 
@@ -798,8 +796,6 @@ class AddEnrollmentView(ui.View):
                  await message.edit(embed=new_embed, view=view_obj)
              elif type_str in events:
                  events[type_str][msg_id]["participants"] = participants
-                 # W eventach (zancudo/cayo) nie ma interaktywnych przycisków
-                 # Wystarczy odświeżyć wewnętrzną listę participants
 
         await interaction.response.edit_message(
             content=f"✅ Pomyślnie wpisano **{self.member_to_add.display_name}** na **{type_str.capitalize()}** (ID: `{msg_id}`).", 
@@ -828,6 +824,7 @@ async def add_to_enrollment(interaction: discord.Interaction, członek: discord.
 def run_discord_bot():
     client.run(token)
 
+# Uruchomienie bota i serwera Flask (Render)
 threading.Thread(target=run_discord_bot).start()
 
 if __name__ == "__main__":
