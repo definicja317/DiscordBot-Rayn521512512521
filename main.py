@@ -281,7 +281,7 @@ class CapturesView(ui.View):
 
 
 # =======================================================
-# <<< NOWE FUNKCJE DLA SQUADÓW >>>
+# <<< FUNKCJE DLA SQUADÓW >>>
 # =======================================================
 
 def create_squad_embed(guild: discord.Guild, author_name: str, members_list: str = "Brak członków składu.", title: str = "Main Squad"):
@@ -300,8 +300,7 @@ def create_squad_embed(guild: discord.Guild, author_name: str, members_list: str
     embed = discord.Embed(
         title=title, 
         description=f"Oto aktualny skład:\n\n{members_list}", 
-        # POPRAWKA BŁĘDU: Zmieniono .white() na Color(0xFFFFFF)
-        color=discord.Color(0xFFFFFF) 
+        color=discord.Color(0xFFFFFF) # POPRAWIONE: Zmieniono .white() na Color(0xFFFFFF)
     )
     embed.set_thumbnail(url=LOGO_URL)
     
@@ -318,9 +317,9 @@ class SquadModal(ui.Modal, title='Edytuj Skład'):
         # Optymalizacja danych w Modalu
         editable_content = self._prepare_editable_content(current_content)
         
-        # POPRAWKA BŁĘDU HTTP 400: Etykieta musi mieć <= 45 znaków
+        # POPRAWIONE: Skrócono etykietę do mniej niż 45 znaków
         self.list_input = ui.TextInput(
-            label='Lista (nr-ID/nick, np. 1- 1234567890)', # Skrócono etykietę
+            label='Lista (nr-ID/nick, np. 1- 1234567890)', 
             style=discord.TextStyle.paragraph,
             default=editable_content,
             required=True,
@@ -372,15 +371,15 @@ class SquadModal(ui.Modal, title='Edytuj Skład'):
             member = None
             if name_or_id_to_search:
                 
-                # NOWA LOGIKA: Sprawdź, czy to jest ID
+                # LOGIKA: Sprawdź, czy to jest ID
                 if name_or_id_to_search.isdigit():
                     try:
                         member_id = int(name_or_id_to_search)
                         member = guild.get_member(member_id)
                     except ValueError:
-                        pass # To nie był poprawny numer
+                        pass
                         
-                # STARA LOGIKA: Jeśli nie ID, spróbuj znaleźć po nazwie/tagu
+                # LOGIKA: Jeśli nie ID, spróbuj znaleźć po nazwie/tagu
                 if member is None:
                     member = guild.get_member_named(name_or_id_to_search)
 
@@ -576,23 +575,81 @@ async def list_all(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 # Set status
-@tree.command(name="set-status", description="Zmienia status bota (tylko admini)")
-async def set_status(interaction: discord.Interaction, status: str, activity: str = None):
+# ===============================================
+# <<< ZMODYFIKOWANA KOMENDA SET-STATUS >>>
+# ===============================================
+@tree.command(name="set-status", description="Zmienia status i aktywność bota (tylko admini)")
+async def set_status(interaction: discord.Interaction, status: str, opis_aktywnosci: str = None, typ_aktywnosci: str = None, url_stream: str = None):
     if interaction.user.id not in STATUS_ADMINS:
         await interaction.response.send_message("⛔ Brak uprawnień!", ephemeral=True)
         return
+
+    # Mapowanie statusów
     status_map = {
         "online": discord.Status.online,
         "idle": discord.Status.idle,
         "dnd": discord.Status.dnd,
         "invisible": discord.Status.invisible,
     }
+    
+    # Mapowanie typów aktywności
+    activity_type_map = {
+        "gra": discord.ActivityType.playing,    # Gra w...
+        "slucha": discord.ActivityType.listening, # Słucha...
+        "patrzy": discord.ActivityType.watching,   # Ogląda...
+        "stream": discord.ActivityType.streaming,  # Streamuje...
+    }
+
     if status.lower() not in status_map:
-        await interaction.response.send_message("⚠️ Podaj: online/idle/dnd/invisible", ephemeral=True)
+        await interaction.response.send_message("⚠️ Nieprawidłowy status. Użyj: online/idle/dnd/invisible.", ephemeral=True)
         return
-    await client.change_presence(status=status_map[status.lower()],
-                                 activity=discord.Game(name=activity) if activity else None)
-    await interaction.response.send_message(f"✅ Status ustawiony na {status}", ephemeral=True)
+        
+    activity = None
+    if opis_aktywnosci:
+        activity_type = discord.ActivityType.playing # Domyślnie "Gra"
+        
+        if typ_aktywnosci and typ_aktywnosci.lower() in activity_type_map:
+            activity_type = activity_type_map[typ_aktywnosci.lower()]
+
+        if activity_type == discord.ActivityType.streaming:
+            # Dla streamingu wymagany jest link i typ musi być ustawiony na streaming
+            if not url_stream or not (url_stream.startswith('http://') or url_stream.startswith('https://')):
+                await interaction.response.send_message("⚠️ Aby ustawić 'stream', musisz podać poprawny link (URL) do streamu w argumencie `url_stream`!", ephemeral=True)
+                return
+            
+            activity = discord.Activity(
+                name=opis_aktywnosci,
+                type=discord.ActivityType.streaming,
+                url=url_stream
+            )
+        else:
+            # Dla pozostałych typów
+            activity = discord.Activity(
+                name=opis_aktywnosci,
+                type=activity_type
+            )
+
+    await client.change_presence(status=status_map[status.lower()], activity=activity)
+    
+    response_msg = f"✅ Status ustawiony na **{status.upper()}**"
+    if opis_aktywnosci:
+        if activity_type == discord.ActivityType.playing:
+            activity_text = f"Gra w **{opis_aktywnosci}**"
+        elif activity_type == discord.ActivityType.listening:
+            activity_text = f"Słucha **{opis_aktywnosci}**"
+        elif activity_type == discord.ActivityType.watching:
+            activity_text = f"Ogląda **{opis_aktywnosci}**"
+        elif activity_type == discord.ActivityType.streaming:
+            activity_text = f"Streamuje **{opis_aktywnosci}** (URL: {url_stream})"
+        else:
+             activity_text = f"Aktywność: **{opis_aktywnosci}**"
+             
+        response_msg += f" z aktywnością: **{activity_text}**"
+
+    await interaction.response.send_message(response_msg, ephemeral=True)
+# ===============================================
+# <<< KONIEC ZMODYFIKOWANEJ KOMENDY SET-STATUS >>>
+# ===============================================
 
 # ===============================================
 # <<< KOMENDA - WYPISZ-Z-CAPT >>>
