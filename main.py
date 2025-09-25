@@ -23,7 +23,7 @@ if not token:
 
 # --- Ustawienia ---
 PICK_ROLE_ID = 1413424476770664499
-STATUS_ADMINS = [1184620388425138183, 1409225386998501480, 1007732573063098378, 364869132526551050]  # <<< wpisz swoje ID
+STATUS_ADMINS = [1184620388425138183, 1409225386998501480, 1007732573063098378, 364869132526551050]   # <<< wpisz swoje ID
 ADMIN_ROLES = STATUS_ADMINS # Używane do komend /wpisz-na-capt, /wypisz-z-capt, /create-squad
 ZANCUDO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414194392214011974/image.png"
 CAYO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414204332747915274/image.png"
@@ -215,6 +215,7 @@ class CapturesView(ui.View):
         participants_ids = captures.get(self.capture_id, {}).get("participants", [])
         
         embed = discord.Embed(title="CAPTURES!", description="Kliknij przycisk, aby się zapisać!", color=discord.Color(0xFFFFFF))
+        embed.set_thumbnail(url=LOGO_URL) # <<< DODANO WSTAWIENIE LOGO
         
         # LOGIKA WYŚWIETLANIA LISTY OSÓB
         if participants_ids:
@@ -296,7 +297,7 @@ def create_squad_embed(guild: discord.Guild, author_name: str, members_list: str
     embed = discord.Embed(
         title=title, 
         description=f"Oto aktualny skład:\n\n{members_list}", 
-        color=discord.Color.white() # Biały kolor
+        color=discord.Color(0xFFFFFF) # POPRAWIONE: Użyto stałej wartości, aby uniknąć błędu AttributeError
     )
     embed.set_thumbnail(url=LOGO_URL)
     
@@ -472,6 +473,7 @@ async def ping_zancudo(interaction: discord.Interaction, role: discord.Role, cha
     await interaction.response.defer(ephemeral=True)
     embed = discord.Embed(title="Atak na FORT ZANCUDO!", description=f"Zapraszamy na {channel.mention}!", color=discord.Color(0xFF0000))
     embed.set_image(url=ZANCUDO_IMAGE_URL)
+    embed.set_thumbnail(url=LOGO_URL) 
     sent = await interaction.channel.send(content=f"{role.mention}", embed=embed)
     events["zancudo"][sent.id] = {"participants": [], "message": sent, "channel_id": sent.channel.id}
     await interaction.followup.send("✅ Ogłoszenie o ataku wysłane!", ephemeral=True)
@@ -481,6 +483,7 @@ async def ping_cayo(interaction: discord.Interaction, role: discord.Role, channe
     await interaction.response.defer(ephemeral=True)
     embed = discord.Embed(title="Atak na CAYO PERICO!", description=f"Zapraszamy na {channel.mention}!", color=discord.Color(0xFFAA00))
     embed.set_image(url=CAYO_IMAGE_URL)
+    embed.set_thumbnail(url=LOGO_URL) 
     sent = await interaction.channel.send(content=f"{role.mention}", embed=embed)
     events["cayo"][sent.id] = {"participants": [], "message": sent, "channel_id": sent.channel.id}
     await interaction.followup.send("✅ Ogłoszenie o ataku wysłane!", ephemeral=True)
@@ -576,12 +579,14 @@ class RemoveEnrollmentView(ui.View):
                  captures[msg_id]["participants"] = participants
                  
                  author_name = data_dict["author_name"]
-                     
+                      
                  view_obj = CapturesView(msg_id, author_name)
                  new_embed = view_obj.make_embed(message.guild)
                  await message.edit(embed=new_embed, view=view_obj)
             elif type_str in events:
                  events[type_str][msg_id]["participants"] = participants
+                 # W eventach (zancudo/cayo) nie ma interaktywnych przycisków
+                 # Wystarczy odświeżyć wewnętrzną listę participants
 
         await interaction.response.edit_message(
             content=f"✅ Pomyślnie wypisano **{self.member_to_remove.display_name}** z **{type_str.capitalize()}** (ID: `{msg_id}`).", 
@@ -660,12 +665,14 @@ class AddEnrollmentView(ui.View):
                  captures[msg_id]["participants"] = participants
                  
                  author_name = data_dict["author_name"]
-                     
+                      
                  view_obj = CapturesView(msg_id, author_name)
                  new_embed = view_obj.make_embed(message.guild)
                  await message.edit(embed=new_embed, view=view_obj)
              elif type_str in events:
                  events[type_str][msg_id]["participants"] = participants
+                 # W eventach (zancudo/cayo) nie ma interaktywnych przycisków
+                 # Wystarczy odświeżyć wewnętrzną listę participants
 
         await interaction.response.edit_message(
             content=f"✅ Pomyślnie wpisano **{self.member_to_add.display_name}** na **{type_str.capitalize()}** (ID: `{msg_id}`).", 
