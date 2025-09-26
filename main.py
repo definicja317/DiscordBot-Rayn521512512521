@@ -38,31 +38,37 @@ intents.members = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-# DODANO: GLOBALNA OBSŁUGA BŁĘDÓW (aby uniknąć "Brak integracji")
+# DODANO: GLOBALNA OBSŁUGA BŁĘDÓW (aby uniknąć "Unknown interaction" i "Brak integracji")
 @tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     # Drukuj błąd w konsoli (to jest najważniejsze, by poznać przyczynę)
     print(f"Globalny błąd komendy {interaction.command.name} (użytkownik: {interaction.user.display_name}):")
-    # Zabezpieczenie przed błędem uprawnień
+    # Logowanie pełnego tracebacka
+    traceback.print_exc() 
+    
+    # Obsługa błędu MissingRole
     if isinstance(error, app_commands.MissingRole):
         await interaction.response.send_message(f"⛔ Nie masz wymaganej roli, aby użyć tej komendy! (Wymagana rola ID: `{error.missing_role}`)", ephemeral=True)
         return
+        
+    # Obsługa innych błędów, w tym 404 (Unknown Interaction)
+    error_name = type(error).__name__
     
-    traceback.print_exc()
-
-    # Wysyłanie wiadomości zwrotnej do użytkownika, aby uniknąć "Brak integracji"
+    # Wysyłanie wiadomości zwrotnej do użytkownika
     try:
         # Sprawdzamy, czy interakcja została już obsłużona (np. przez defer)
         if interaction.response.is_done():
             # Używamy followup, jeśli bot już odpowiedział
-            await interaction.followup.send(f"❌ Wystąpił błąd w kodzie: `{type(error).__name__}`. Sprawdź logi bota!", ephemeral=True)
+            await interaction.followup.send(f"❌ Wystąpił błąd w kodzie: `{error_name}`. Sprawdź logi bota! Jeśli to był błąd 404/10062, powinien teraz zniknąć.", ephemeral=True)
         else:
             # Odpowiadamy normalnie, jeśli interakcja jeszcze nie została obsłużona
-            await interaction.response.send_message(f"❌ Wystąpił błąd w kodzie: `{type(error).__name__}`. Sprawdź logi bota!", ephemeral=True)
+            await interaction.response.send_message(f"❌ Wystąpił błąd w kodzie: `{error_name}`. Sprawdź logi bota! Jeśli to był błąd 404/10062, powinien teraz zniknąć.", ephemeral=True)
             
     except discord.HTTPException:
-        pass
+        # Jeśli nawet próba wysłania błędu zwróci błąd HTTP (np. Unknown Interaction)
+        print("Nie udało się wysłać wiadomości o błędzie do użytkownika, prawdopodobnie interakcja wygasła (10062).")
 # KONIEC GLOBALNEJ OBSŁUGI BŁĘDÓW
+
 
 # --- Pamięć zapisów ---
 # WAŻNE: W przypadku restartu bota te dane zostaną wyczyszczone!
@@ -379,7 +385,7 @@ def create_squad_embed(guild: discord.Guild, author_name: str, member_ids: list[
     members_list_str = "\n".join(member_lines) if member_lines else "Brak członków składu."
     count = len(member_ids)
         
-    # POPRAWKA KOLORU: używamy 0xFFFFFF (biały)
+    # POPRAWKA KOLORU: używamy 0xFFFFFF (biały) zamiast .white
     embed = discord.Embed(
         title=title, 
         description=f"Oto aktualny skład:\n\n{members_list_str}", 
@@ -621,6 +627,7 @@ async def create_capt(interaction: discord.Interaction):
     view.custom_id = f"captures_view:{sent.id}"
     await sent.edit(view=view) 
     
+    # ZMIANA: Wysyłamy wiadomość follow-up po zakończeniu wszystkich operacji
     await interaction.followup.send("Ogłoszenie o captures wysłane!", ephemeral=True)
 
 # AirDrop
@@ -688,14 +695,13 @@ async def list_all(interaction: discord.Interaction):
 
     if not desc:
         desc = "Brak aktywnych zapisów i składów."
-    # POPRAWKA KOLORU: używamy 0xFFFFFF (biały) zamiast .blue
+    # POPRAWKA KOLORU: używamy 0xFFFFFF (biały) zamiast .blue()
     embed = discord.Embed(title="📋 Lista wszystkich zapisanych i składów", description=desc, color=discord.Color(0xFFFFFF))
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 # Set status
 @tree.command(name="set-status", description="Zmienia status i aktywność bota (tylko admini)")
 async def set_status(interaction: discord.Interaction, status: str, opis_aktywnosci: str = None, typ_aktywnosci: str = None, url_stream: str = None):
-    # POPRAWKA WCIĘCIA: cały kod funkcji musi być wcięty
     if interaction.user.id not in STATUS_ADMINS:
         await interaction.response.send_message("⛔ Brak uprawnień!", ephemeral=True)
         return
@@ -758,7 +764,7 @@ async def set_status(interaction: discord.Interaction, status: str, opis_aktywno
              
         response_msg += f" z aktywnością: **{activity_text}**"
 
-    await interaction.response.send_message(response_msg, ephemeral=True) # TUTAJ BYŁ BŁĄD WCIĘCIA
+    await interaction.response.send_message(response_msg, ephemeral=True)
 
 # Wypisz z capt
 class RemoveEnrollmentView(ui.View):
