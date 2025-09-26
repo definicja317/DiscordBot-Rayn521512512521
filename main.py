@@ -260,11 +260,13 @@ class PickPlayersView(ui.View):
         await interaction.followup.send(embed=final_embed)
 
 class CapturesView(ui.View):
-    def __init__(self, capture_id: int, author_name: str): 
+    # ZMIANA W INICJALIZACJI: Dodanie image_url
+    def __init__(self, capture_id: int, author_name: str, image_url: str = None): 
         # ZMIANA: timeout=None dla trwałych widoków
         super().__init__(timeout=None)
         self.capture_id = capture_id
         self.author_name = author_name
+        self.image_url = image_url # DODANE
         # ZMIANA: Dodanie custom_id widoku, ważne do przywracania
         self.custom_id = f"captures_view:{capture_id}"
 
@@ -274,6 +276,10 @@ class CapturesView(ui.View):
         # POPRAWKA KOLORU: używamy 0xFFFFFF (biały)
         embed = discord.Embed(title="CAPTURES!", description="Kliknij przycisk, aby się zapisać!", color=discord.Color(0xFFFFFF))
         embed.set_thumbnail(url=LOGO_URL) 
+        
+        # DODANA LOGIKA: Ustawienie obrazka, jeśli link został podany
+        if self.image_url:
+            embed.set_image(url=self.image_url)
         
         if participants_ids:
             lines = []
@@ -302,7 +308,8 @@ class CapturesView(ui.View):
             
             # Używamy bezpiecznego dostępu
             if self.capture_id not in captures:
-                 captures[self.capture_id] = {"participants": [], "author_name": self.author_name} # DODANO author_name
+                 # UWZGLĘDNIENIE image_url przy ponownej inicjalizacji danych, jeśli zaginęły
+                 captures[self.capture_id] = {"participants": [], "author_name": self.author_name, "image_url": self.image_url} 
                  
             captures[self.capture_id]["participants"].append(user_id)
             
@@ -534,8 +541,9 @@ async def on_ready():
                  channel = client.get_channel(data["channel_id"])
                  if channel:
                      data["message"] = await channel.fetch_message(msg_id)
-                     # ZMIANA: Dodajemy widok CapturesView
-                     client.add_view(CapturesView(msg_id, data["author_name"]))
+                     # ZMIANA: Dodajemy widok CapturesView, przekazując image_url
+                     image_url = data.get("image_url")
+                     client.add_view(CapturesView(msg_id, data["author_name"], image_url))
              except discord.NotFound:
                  print(f"Ostrzeżenie: Nie znaleziono wiadomości Captures {msg_id}. Pomijam przywracanie widoku.")
              except Exception as e:
@@ -607,20 +615,29 @@ async def create_squad(interaction: discord.Interaction, rola: discord.Role, tyt
     await interaction.followup.send(f"✅ Ogłoszenie o składzie '{tytul}' dla roli {rola.mention} wysłane!", ephemeral=True)
 
 
-# Captures
+# ZMIANA: Dodanie opcjonalnego argumentu 'link_do_zdjecia'
 @tree.command(name="create-capt", description="Tworzy ogłoszenie o captures.")
-async def create_capt(interaction: discord.Interaction):
+async def create_capt(interaction: discord.Interaction, link_do_zdjecia: str = None):
     # KLUCZOWA POPRAWKA: Defer
     await interaction.response.defer(ephemeral=True) 
     
     author_name = interaction.user.display_name
+    
     # Ważne: message_id=0 zostanie ustawione później na sent.id
-    view = CapturesView(0, author_name) 
+    # ZMIANA: Przekazujemy link_do_zdjecia do widoku
+    view = CapturesView(0, author_name, link_do_zdjecia) 
     embed = view.make_embed(interaction.guild)
     
     sent = await interaction.channel.send(content="@everyone", embed=embed, view=view)
     
-    captures[sent.id] = {"participants": [], "message": sent, "channel_id": sent.channel.id, "author_name": author_name}
+    # ZMIANA: Zapisujemy link_do_zdjecia w pamięci
+    captures[sent.id] = {
+        "participants": [], 
+        "message": sent, 
+        "channel_id": sent.channel.id, 
+        "author_name": author_name,
+        "image_url": link_do_zdjecia # DODANE
+    }
     
     # Aktualizacja View z poprawnym ID wiadomości i custom_id
     view.capture_id = sent.id 
@@ -823,8 +840,9 @@ class RemoveEnrollmentView(ui.View):
             elif type_str == "captures":
                  captures[msg_id]["participants"] = participants
                  author_name = data_dict["author_name"]
-                 # ZMIANA: używamy message_id z data_dict
-                 view_obj = CapturesView(msg_id, author_name) 
+                 image_url = data_dict.get("image_url") # POBRANO image_url
+                 # ZMIANA: używamy message_id z data_dict i przekazujemy image_url
+                 view_obj = CapturesView(msg_id, author_name, image_url) 
                  new_embed = view_obj.make_embed(message.guild)
                  await message.edit(embed=new_embed, view=view_obj)
             elif type_str in events:
@@ -911,8 +929,9 @@ class AddEnrollmentView(ui.View):
              elif type_str == "captures":
                  captures[msg_id]["participants"] = participants
                  author_name = data_dict["author_name"]
-                 # ZMIANA: używamy message_id z data_dict
-                 view_obj = CapturesView(msg_id, author_name) 
+                 image_url = data_dict.get("image_url") # POBRANO image_url
+                 # ZMIANA: używamy message_id z data_dict i przekazujemy image_url
+                 view_obj = CapturesView(msg_id, author_name, image_url) 
                  new_embed = view_obj.make_embed(message.guild)
                  await message.edit(embed=new_embed, view=view_obj)
              elif type_str in events:
