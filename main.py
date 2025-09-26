@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from datetime import datetime, timedelta # DODANO: timedelta
 import re 
 import traceback # DODANO: dla lepszej obsługi błędów
-import time # DODANO: do timestampów
+import time 
 
 # --- Flask ---
 app = Flask(__name__)
@@ -41,7 +41,8 @@ def create_timestamp(czas_str: str, data_str: str = None) -> int:
     # 1. Parsowanie czasu HH:MM
     match = re.match(r"(\d{1,2}):(\d{2})", czas_str)
     if not match:
-        raise ValueError("Nieprawidłowy format czasu. Użyj HH:MM.")
+        # Prawidłowy komunikat błędu
+        raise ValueError("Nieprawidłowy format czasu. Użyj HH:MM (np. 21:30).")
     hour, minute = map(int, match.groups())
 
     # 2. Parsowanie daty
@@ -54,10 +55,11 @@ def create_timestamp(czas_str: str, data_str: str = None) -> int:
             # Alternatywa: próba parsowania formatu DD.MM
             try:
                 dt = datetime.strptime(data_str, "%d.%m")
-                # Ustawiamy rok na bieżący rok (ważne, jeśli nie podano RRRR)
+                # Ustawiamy rok na bieżący rok
                 dt = dt.replace(year=today.year)
             except ValueError:
-                raise ValueError("Nieprawidłowy format daty. Użyj DD.MM.RRRR lub DD.MM.")
+                # Prawidłowy komunikat błędu
+                raise ValueError("Nieprawidłowy format daty. Użyj DD.MM.RRRR lub DD.MM (np. 27.09.2025).")
     else:
         # Jeśli data_str nie jest podana, używamy dzisiejszej daty
         dt = today
@@ -79,7 +81,7 @@ def create_timestamp(czas_str: str, data_str: str = None) -> int:
 def is_bot_admin():
     """Wymaga, aby użytkownik miał rolę BOT_ADMIN_ROLE_ID."""
     async def predicate(interaction: discord.Interaction):
-        # Używamy get_member, aby uzyskać obiekt Member, który ma roles
+        # Sprawdzamy, czy użytkownik jest na serwerze i ma rolę
         if interaction.guild:
             member = interaction.guild.get_member(interaction.user.id)
             if member and BOT_ADMIN_ROLE_ID in [role.id for role in member.roles]:
@@ -96,7 +98,7 @@ intents.members = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-# DODANO: GLOBALNA OBSŁUGA BŁĘDÓW (dla MissingRole i innych)
+# DODANO: GLOBALNA OBSŁUGA BŁĘDÓW (dla MissingRole, ValueError i 404/10062)
 @tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     print(f"Globalny błąd komendy {interaction.command.name} (użytkownik: {interaction.user.display_name}):")
@@ -110,18 +112,29 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
         await interaction.response.send_message(f"⛔ Nie masz wymaganej roli, aby użyć tej komendy! (Wymagana rola: **{role_name}**)", ephemeral=True)
         return
     
-    # Obsługa błędu ValueError z funkcji create_timestamp
-    if isinstance(error, app_commands.AppCommandInvokeError) and isinstance(error.original, ValueError):
-        await interaction.response.send_message(f"❌ Błąd formatu czasu/daty: **{error.original}**", ephemeral=True)
-        return
-        
+    # POPRAWKA: Obsługa błędu AppCommandInvokeError, który zawiera oryginalny wyjątek
+    if isinstance(error, app_commands.CommandInvokeError):
+        # Obsługa błędu ValueError z funkcji create_timestamp
+        if isinstance(error.original, ValueError):
+            await interaction.response.send_message(f"❌ Błąd formatu czasu/daty: **{error.original}**", ephemeral=True)
+            return
+            
+        # Obsługa błędu 404/10062 (Unknown interaction), który często jest w oryginalnym wyjątku
+        if isinstance(error.original, discord.NotFound) and "10062" in str(error.original):
+            print("Wykryto i pominięto błąd 10062 (Unknown interaction).")
+            # Nie wysyłamy wiadomości, bo interakcja już zniknęła
+            return
+            
     error_name = type(error).__name__
     
+    # Wysłanie ogólnej wiadomości o błędzie (jeśli interakcja nadal jest aktywna)
     try:
         if interaction.response.is_done():
-            await interaction.followup.send(f"❌ Wystąpił błąd w kodzie: `{error_name}`. Sprawdź logi bota! Jeśli to był błąd 404/10062, powinien teraz zniknąć.", ephemeral=True)
+            # Użycie followup, jeśli odpowiedź została już wysłana
+            await interaction.followup.send(f"❌ Wystąpił błąd w kodzie: `{error_name}`. Sprawdź logi bota!", ephemeral=True)
         else:
-            await interaction.response.send_message(f"❌ Wystąpił błąd w kodzie: `{error_name}`. Sprawdź logi bota! Jeśli to był błąd 404/10062, powinien teraz zniknąć.", ephemeral=True)
+            # Użycie response.send_message, jeśli to pierwsza odpowiedź
+            await interaction.response.send_message(f"❌ Wystąpił błąd w kodzie: `{error_name}`. Sprawdź logi bota!", ephemeral=True)
             
     except discord.HTTPException:
         print("Nie udało się wysłać wiadomości o błędzie do użytkownika, prawdopodobnie interakcja wygasła (10062).")
@@ -357,6 +370,7 @@ class CapturesView(ui.View):
             await interaction.response.defer() 
             
             if self.capture_id not in captures:
+                 # Pełniejsze zapisywanie danych, które są potrzebne do odtworzenia widoku i edycji
                  captures[self.capture_id] = {"participants": [], "author_name": self.author_name, "image_url": self.image_url, "timestamp": self.timestamp} 
                  
             captures[self.capture_id]["participants"].append(user_id)
@@ -415,7 +429,6 @@ class CapturesView(ui.View):
 
 # =======================================================
 # <<< FUNKCJE DLA SQUADÓW >>>
-# (pozostawione bez zmian w funkcjonalności, ale dodano is_bot_admin)
 # =======================================================
 
 def create_squad_embed(guild: discord.Guild, author_name: str, member_ids: list[int], title: str = "Main Squad"):
@@ -507,9 +520,9 @@ class SquadView(ui.View):
     async def manage_squad_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True) 
 
-        # Sprawdzenie, czy użytkownik jest adminem
+        # KLUCZOWA POPRAWKA: Używamy BOT_ADMIN_ROLE_ID do zarządzania komendą.
         guild_member = interaction.guild.get_member(interaction.user.id)
-        if not guild_member or interaction.user.id not in ADMIN_ROLES:
+        if not guild_member or BOT_ADMIN_ROLE_ID not in [r.id for r in guild_member.roles]:
             await interaction.followup.send("⛔ Brak uprawnień do zarządzania składem!", ephemeral=True)
             return
 
@@ -536,7 +549,7 @@ class SquadView(ui.View):
 # =====================
 @client.event
 async def on_ready():
-    # Przywracanie widoków (Captures i Airdrop z nowymi danymi timestamp)
+    # Przywracanie widoków
     
     # 1. SQUAD VIEWS
     if squads:
@@ -561,8 +574,7 @@ async def on_ready():
                  if channel:
                      data["message"] = await channel.fetch_message(msg_id)
                      image_url = data.get("image_url")
-                     timestamp = data.get("timestamp") # POBRANO timestamp
-                     # ZMIANA: Przekazujemy timestamp do widoku
+                     timestamp = data.get("timestamp")
                      client.add_view(CapturesView(msg_id, data["author_name"], image_url, timestamp))
              except discord.NotFound:
                  print(f"Ostrzeżenie: Nie znaleziono wiadomości Captures {msg_id}. Pomijam przywracanie widoku.")
@@ -578,10 +590,9 @@ async def on_ready():
                  if channel:
                      data["message"] = await channel.fetch_message(msg_id)
                      voice_channel = client.get_channel(data["voice_channel_id"])
-                     timestamp = data.get("timestamp") # POBRANO timestamp
+                     timestamp = data.get("timestamp") 
                      
                      if voice_channel:
-                         # ZMIANA: Przekazujemy timestamp do widoku
                          view = AirdropView(msg_id, data["description"], voice_channel, data["author_name"], timestamp)
                          view.participants = data.get("participants", []) 
                          client.add_view(view)
@@ -633,12 +644,8 @@ async def create_squad(interaction: discord.Interaction, rola: discord.Role, tyt
 async def create_capt(interaction: discord.Interaction, czas_zakonczenia: str, data_zakonczenia: str = None, link_do_zdjecia: str = None):
     await interaction.response.defer(ephemeral=True) 
     
-    # 1. Przetwarzanie czasu
-    try:
-        timestamp = create_timestamp(czas_zakonczenia, data_zakonczenia)
-    except ValueError as e:
-        # Zgłoszenie błędu ValueError, który zostanie przechwycony przez globalny handler
-        raise ValueError(e)
+    # 1. Przetwarzanie czasu (ValueErrors są teraz obsługiwane w @tree.error)
+    timestamp = create_timestamp(czas_zakonczenia, data_zakonczenia)
     
     author_name = interaction.user.display_name
     
@@ -671,12 +678,8 @@ async def create_capt(interaction: discord.Interaction, czas_zakonczenia: str, d
 async def airdrop_command(interaction: discord.Interaction, channel: discord.TextChannel, voice: discord.VoiceChannel, role: discord.Role, opis: str, czas_zakonczenia: str, data_zakonczenia: str = None):
     await interaction.response.defer(ephemeral=True)
     
-    # 1. Przetwarzanie czasu
-    try:
-        timestamp = create_timestamp(czas_zakonczenia, data_zakonczenia)
-    except ValueError as e:
-        # Zgłoszenie błędu ValueError
-        raise ValueError(e)
+    # 1. Przetwarzanie czasu (ValueErrors są teraz obsługiwane w @tree.error)
+    timestamp = create_timestamp(czas_zakonczenia, data_zakonczenia)
         
     # 2. Tworzenie i wysyłka
     view = AirdropView(0, opis, voice, interaction.user.display_name, timestamp) # Przekazanie timestamp
@@ -739,14 +742,18 @@ async def list_all(interaction: discord.Interaction):
 
     if not desc:
         desc = "Brak aktywnych zapisów i składów."
+    # POPRAWKA: Używamy stałego koloru 0xFFFFFF (biały) zamiast Color.blue()
     embed = discord.Embed(title="📋 Lista wszystkich zapisanych i składów", description=desc, color=discord.Color(0xFFFFFF))
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 # Set status - używa STATUS_ADMINS (nie ruszamy, bo to inna lista)
 @tree.command(name="set-status", description="Zmienia status i aktywność bota (tylko admini)")
 async def set_status(interaction: discord.Interaction, status: str, opis_aktywnosci: str = None, typ_aktywnosci: str = None, url_stream: str = None):
+    # KLUCZOWA POPRAWKA: Defer przed wysłaniem odpowiedzi
+    await interaction.response.defer(ephemeral=True, thinking=True) 
+
     if interaction.user.id not in STATUS_ADMINS:
-        await interaction.response.send_message("⛔ Brak uprawnień!", ephemeral=True)
+        await interaction.followup.send("⛔ Brak uprawnień!", ephemeral=True)
         return
 
     status_map = {
@@ -764,7 +771,7 @@ async def set_status(interaction: discord.Interaction, status: str, opis_aktywno
     }
 
     if status.lower() not in status_map:
-        await interaction.response.send_message("⚠️ Nieprawidłowy status. Użyj: online/idle/dnd/invisible.", ephemeral=True)
+        await interaction.followup.send("⚠️ Nieprawidłowy status. Użyj: online/idle/dnd/invisible.", ephemeral=True)
         return
         
     activity = None
@@ -776,7 +783,7 @@ async def set_status(interaction: discord.Interaction, status: str, opis_aktywno
 
         if activity_type == discord.ActivityType.streaming:
             if not url_stream or not (url_stream.startswith('http://') or url_stream.startswith('https://')):
-                await interaction.response.send_message("⚠️ Aby ustawić 'stream', musisz podać poprawny link (URL) do streamu w argumencie `url_stream`!", ephemeral=True)
+                await interaction.followup.send("⚠️ Aby ustawić 'stream', musisz podać poprawny link (URL) do streamu w argumencie `url_stream`!", ephemeral=True)
                 return
             
             activity = discord.Activity(
@@ -807,7 +814,7 @@ async def set_status(interaction: discord.Interaction, status: str, opis_aktywno
              
         response_msg += f" z aktywnością: **{activity_text}**"
 
-    await interaction.response.send_message(response_msg, ephemeral=True)
+    await interaction.followup.send(response_msg, ephemeral=True)
 
 # Wypisz z capt
 class RemoveEnrollmentView(ui.View):
@@ -855,9 +862,8 @@ class RemoveEnrollmentView(ui.View):
                 voice_channel = message.guild.get_channel(data_dict["voice_channel_id"])
                 description = data_dict["description"]
                 author_name = data_dict["author_name"]
-                timestamp = data_dict.get("timestamp") # POBRANO timestamp
+                timestamp = data_dict.get("timestamp")
                 
-                # ZMIANA: używamy message_id z data_dict, i przekazujemy timestamp
                 view_obj = AirdropView(msg_id, description, voice_channel, author_name, timestamp) 
                 view_obj.participants = participants
                 airdrops[msg_id]["participants"] = participants
@@ -866,8 +872,7 @@ class RemoveEnrollmentView(ui.View):
                  captures[msg_id]["participants"] = participants
                  author_name = data_dict["author_name"]
                  image_url = data_dict.get("image_url") 
-                 timestamp = data_dict.get("timestamp") # POBRANO timestamp
-                 # ZMIANA: używamy message_id z data_dict i przekazujemy image_url i timestamp
+                 timestamp = data_dict.get("timestamp")
                  view_obj = CapturesView(msg_id, author_name, image_url, timestamp) 
                  new_embed = view_obj.make_embed(message.guild)
                  await message.edit(embed=new_embed, view=view_obj)
@@ -941,9 +946,8 @@ class AddEnrollmentView(ui.View):
                 voice_channel = message.guild.get_channel(data_dict["voice_channel_id"])
                 description = data_dict["description"]
                 author_name = data_dict["author_name"]
-                timestamp = data_dict.get("timestamp") # POBRANO timestamp
+                timestamp = data_dict.get("timestamp")
 
-                # ZMIANA: używamy message_id z data_dict i przekazujemy timestamp
                 view_obj = AirdropView(msg_id, description, voice_channel, author_name, timestamp) 
                 view_obj.participants = participants
                 airdrops[msg_id]["participants"] = participants
@@ -952,8 +956,7 @@ class AddEnrollmentView(ui.View):
                  captures[msg_id]["participants"] = participants
                  author_name = data_dict["author_name"]
                  image_url = data_dict.get("image_url") 
-                 timestamp = data_dict.get("timestamp") # POBRANO timestamp
-                 # ZMIANA: używamy message_id z data_dict i przekazujemy image_url i timestamp
+                 timestamp = data_dict.get("timestamp")
                  view_obj = CapturesView(msg_id, author_name, image_url, timestamp) 
                  new_embed = view_obj.make_embed(message.guild)
                  await message.edit(embed=new_embed, view=view_obj)
