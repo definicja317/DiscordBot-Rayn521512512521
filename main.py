@@ -5,8 +5,8 @@ import sys
 import threading
 from flask import Flask
 from dotenv import load_dotenv
-from datetime import datetime
-import re 
+from datetime import datetime, timedelta
+import re
 
 # --- Flask ---
 app = Flask(__name__)
@@ -24,18 +24,21 @@ if not token:
 
 # --- Ustawienia ---
 # WAŻNE: Wprowadź swoje faktyczne ID ról/użytkowników.
-PICK_ROLE_ID = 1413424476770664499 # ID Roli, która może 'pickować' graczy
+PICK_ROLE_ID = 1413424476770664499 # ID Roli, która może 'pickować' graczy (również id roli panelu w tym wypadku)
 STATUS_ADMINS = [1184620388425138183, 1409225386998501480, 1007732573063098378, 364869132526551050] # ID Użytkowników-Adminów
 ADMIN_ROLES = STATUS_ADMINS 
 ZANCUDO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414194392214011974/image.png"
 CAYO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414204332747915274/image.png"
-LOGO_URL = "https://cdn.discordapp.com/attachments/1184622314302754857/1420796249484824757/RInmPqb.webp?ex=68d6b31e&is=68d5619e&hm=0cdf3f7cbb269b12c9f47d7eb034e40a8d830ff502ca9ceacb3d7902d3819413&"
+LOGO_URL = "https://cdn.discordapp.com/attachments/1184622314302754857/1420796249484824757/RInmPqb.webp?ex=68d75bde&is=68d60a5e&hm=bfa4d847abf3044f8aa23cb2146da7319cf8e6631181e0e0e48515be02919cce&"
 
 # --- Discord Client ---
 intents = discord.Intents.default()
 intents.members = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
+
+# ROLE which can use /panel (user provided)
+ADMIN_PANEL_ROLE_ID = 1413424476770664499
 
 # --- Pamięć zapisów ---
 # WAŻNE: W przypadku restartu bota te dane zostaną wyczyszczone!
@@ -420,7 +423,195 @@ class SquadView(ui.View):
 
 
 # =====================
-#       KOMENDY
+#       PANEL I MODALE
+# =====================
+class EventModal(ui.Modal, title="Kreator eventu"):
+    def __init__(self, event_type: str):
+        super().__init__()
+        self.event_type = event_type
+
+        # Modal ma max 5 TextInput w jednym modalu — dopasowujemy pola
+        self.channel_id = ui.TextInput(label="ID kanału (text channel)", placeholder="Wpisz ID kanału, do którego wysłać ogłoszenie", required=True)
+        self.role_id = ui.TextInput(label="ID roli do oznaczenia (opcjonalne)", placeholder="ID roli lub puste -> @everyone", required=False)
+        self.image_url = ui.TextInput(label="Link do obrazka (opcjonalne)", placeholder="Link do obrazka lub puste", required=False)
+        self.minutes = ui.TextInput(label="Za ile minut event ma się rozpocząć? (liczba)", placeholder="np. 15", required=False)
+        self.description = ui.TextInput(label="Opis / dodatkowe informacje (opcjonalne)", style=discord.TextStyle.long, required=False)
+
+        # Dodajemy pola do modala
+        self.add_item(self.channel_id)
+        self.add_item(self.role_id)
+        self.add_item(self.image_url)
+        self.add_item(self.minutes)
+        self.add_item(self.description)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        # Parsowanie wartości
+        try:
+            channel = None
+            try:
+                ch_id = int(self.channel_id.value.strip())
+                channel = interaction.guild.get_channel(ch_id)
+            except Exception:
+                channel = None
+
+            if not channel:
+                await interaction.followup.send("❌ Nie znaleziono kanału o podanym ID. Upewnij się, że podałeś poprawne ID kanału.", ephemeral=True)
+                return
+
+            role_mention = "@everyone"
+            role = None
+            if self.role_id.value and self.role_id.value.strip():
+                try:
+                    r_id = int(self.role_id.value.strip())
+                    role = interaction.guild.get_role(r_id)
+                    if role:
+                        role_mention = role.mention
+                except Exception:
+                    role = None
+
+            image = self.image_url.value.strip() if self.image_url.value else None
+            minutes = None
+            if self.minutes.value and self.minutes.value.strip():
+                try:
+                    minutes = int(re.sub(r"\D", "", self.minutes.value.strip()))
+                except Exception:
+                    minutes = None
+
+            description = self.description.value.strip() if self.description.value else None
+
+            # Tworzenie embedu zależnie od event_type
+            if self.event_type.lower() == "capt":
+                embed = discord.Embed(title="CAPTURES!", description=description or "Kliknij przycisk, aby się zapisać!", color=discord.Color(0xFFFFFF))
+                embed.set_thumbnail(url=LOGO_URL)
+                if image:
+                    embed.set_image(url=image)
+                sent = await channel.send(content=role_mention, embed=embed, view=CapturesView(0, interaction.user.display_name))
+                captures[sent.id] = {"participants": [], "message": sent, "channel_id": sent.channel.id, "author_name": interaction.user.display_name}
+                # update view id
+                view = CapturesView(sent.id, interaction.user.display_name)
+                view.capture_id = sent.id
+                await sent.edit(view=view)
+
+                await interaction.followup.send("✅ Ogłoszenie o captures wysłane!", ephemeral=True)
+
+            elif self.event_type.lower() == "airdrop":
+                # dla airdrop warto, aby podać voice channel id w polu 'description' lub image — ale zostawiamy, żeby admin wpisał w opisie 'VC:ID' lub w opisie nazwe
+                # Spróbujemy wyciągnąć voice channel id z opisu (pattern: vc:123456)
+                vc = None
+                if description:
+                    m = re.search(r"vc[:\s]*([0-9]+)", description, re.IGNORECASE)
+                    if m:
+                        try:
+                            vc = interaction.guild.get_channel(int(m.group(1)))
+                        except Exception:
+                            vc = None
+                # fallback: first voice channel in guild
+                if not vc:
+                    for ch in interaction.guild.voice_channels:
+                        vc = ch
+                        break
+
+                view = AirdropView(0, description or "AirDrop!", vc, interaction.user.display_name)
+                embed = view.make_embed(interaction.guild)
+                if image:
+                    embed.set_image(url=image)
+                sent = await channel.send(content=role_mention, embed=embed, view=view)
+                view.message_id = sent.id
+                airdrops[sent.id] = {"participants": [], "message": sent, "channel_id": sent.channel.id, "description": description or "AirDrop!", "voice_channel_id": vc.id if vc else None, "author_name": interaction.user.display_name}
+
+                await interaction.followup.send("✅ AirDrop utworzony!", ephemeral=True)
+
+            elif self.event_type.lower() == "zancudo":
+                embed = discord.Embed(title="Atak na FORT ZANCUDO!", description=description or "Zapraszamy!", color=discord.Color(0xFFFFFF))
+                embed.set_thumbnail(url=LOGO_URL)
+                embed.set_image(url=image or ZANCUDO_IMAGE_URL)
+                sent = await channel.send(content=role_mention, embed=embed)
+                events["zancudo"][sent.id] = {"participants": [], "message": sent, "channel_id": sent.channel.id}
+                await interaction.followup.send("✅ Ogłoszenie o ataku wysłane!", ephemeral=True)
+
+            elif self.event_type.lower() == "cayo":
+                embed = discord.Embed(title="Atak na CAYO PERICO!", description=description or "Zapraszamy!", color=discord.Color(0xFFFFFF))
+                embed.set_thumbnail(url=LOGO_URL)
+                embed.set_image(url=image or CAYO_IMAGE_URL)
+                sent = await channel.send(content=role_mention, embed=embed)
+                events["cayo"][sent.id] = {"participants": [], "message": sent, "channel_id": sent.channel.id}
+                await interaction.followup.send("✅ Ogłoszenie o ataku wysłane!", ephemeral=True)
+
+            elif self.event_type.lower() == "squad":
+                # Dla squadu poprosimy w polu 'description' o tytuł opcjonalny
+                title = description or "Main Squad"
+                initial_member_ids = []
+                embed = create_squad_embed(interaction.guild, interaction.user.display_name, initial_member_ids, title)
+                sent = await channel.send(content=role_mention if role else "", embed=embed, view=SquadView(0, role.id if role else None))
+                squads[sent.id] = {"role_id": role.id if role else None, "member_ids": initial_member_ids, "message": sent, "channel_id": sent.channel.id, "author_name": interaction.user.display_name}
+                view = SquadView(sent.id, role.id if role else None)
+                view.message_id = sent.id
+                await sent.edit(view=view)
+                await interaction.followup.send(f"✅ Ogłoszenie o składzie '{title}' wysłane!", ephemeral=True)
+
+            else:
+                await interaction.followup.send("❌ Nieznany typ eventu.", ephemeral=True)
+                return
+
+        except Exception as e:
+            await interaction.followup.send(f"❌ Wystąpił błąd: {e}", ephemeral=True)
+
+class PanelView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @ui.button(label="Capt", style=discord.ButtonStyle.gray, custom_id="panel_capt")
+    async def capt_button(self, interaction: discord.Interaction, button: ui.Button):
+        # sprawdź role
+        if ADMIN_PANEL_ROLE_ID not in [r.id for r in interaction.user.roles]:
+            await interaction.response.send_message("⛔ Nie masz dostępu do panelu!", ephemeral=True)
+            return
+        await interaction.response.send_modal(EventModal("capt"))
+
+    @ui.button(label="AirDrop", style=discord.ButtonStyle.green, custom_id="panel_airdrop")
+    async def airdrop_button(self, interaction: discord.Interaction, button: ui.Button):
+        if ADMIN_PANEL_ROLE_ID not in [r.id for r in interaction.user.roles]:
+            await interaction.response.send_message("⛔ Nie masz dostępu do panelu!", ephemeral=True)
+            return
+        await interaction.response.send_modal(EventModal("airdrop"))
+
+    @ui.button(label="Zancudo", style=discord.ButtonStyle.red, custom_id="panel_zancudo")
+    async def zancudo_button(self, interaction: discord.Interaction, button: ui.Button):
+        if ADMIN_PANEL_ROLE_ID not in [r.id for r in interaction.user.roles]:
+            await interaction.response.send_message("⛔ Nie masz dostępu do panelu!", ephemeral=True)
+            return
+        await interaction.response.send_modal(EventModal("zancudo"))
+
+    @ui.button(label="Cayo", style=discord.ButtonStyle.blurple, custom_id="panel_cayo")
+    async def cayo_button(self, interaction: discord.Interaction, button: ui.Button):
+        if ADMIN_PANEL_ROLE_ID not in [r.id for r in interaction.user.roles]:
+            await interaction.response.send_message("⛔ Nie masz dostępu do panelu!", ephemeral=True)
+            return
+        await interaction.response.send_modal(EventModal("cayo"))
+
+    @ui.button(label="Squad", style=discord.ButtonStyle.primary, custom_id="panel_squad")
+    async def squad_button(self, interaction: discord.Interaction, button: ui.Button):
+        if ADMIN_PANEL_ROLE_ID not in [r.id for r in interaction.user.roles]:
+            await interaction.response.send_message("⛔ Nie masz dostępu do panelu!", ephemeral=True)
+            return
+        await interaction.response.send_modal(EventModal("squad"))
+
+# Komenda panel
+@tree.command(name="panel", description="Otwórz panel eventów (tylko dla wybranej roli)")
+async def panel_command(interaction: discord.Interaction):
+    # dostęp tylko dla roli
+    if ADMIN_PANEL_ROLE_ID not in [r.id for r in interaction.user.roles]:
+        await interaction.response.send_message("⛔ Nie masz dostępu do panelu.", ephemeral=True)
+        return
+
+    embed = discord.Embed(title="📌 Panel Eventów", description="Kliknij przycisk, aby utworzyć event.", color=discord.Color(0xFFFFFF))
+    embed.set_thumbnail(url=LOGO_URL)
+    await interaction.response.send_message(embed=embed, view=PanelView(), ephemeral=True)
+
+# =====================
+#       KOMENDY (bez zmian, zostawione jak prosiłeś)
 # =====================
 @client.event
 async def on_ready():
@@ -436,15 +627,20 @@ async def on_ready():
                      client.add_view(SquadView(msg_id, data["role_id"]))
              except Exception as e:
                  print(f"Błąd przy przywracaniu widoku Squad {msg_id}: {e}")
-                 
+
+    # Dodaj persistent panel view (jeśli chcesz, aby panel był klikalny bez ponownego wysyłania)
+    try:
+        client.add_view(PanelView())
+    except Exception:
+        pass
+
     # Synchronizacja komend
     await tree.sync()
     print(f"✅ Zalogowano jako {client.user}")
 
-# Komenda SQUAD
+# Komenda SQUAD (pozostawiona bez zmian)
 @tree.command(name="create-squad", description="Tworzy ogłoszenie o składzie z możliwością edycji.")
 async def create_squad(interaction: discord.Interaction, rola: discord.Role, tytul: str = "Main Squad"):
-    # KLUCZOWA POPRAWKA: Odroczenie interakcji! Zapobiega błędom 404/10062.
     await interaction.response.defer(ephemeral=True) 
 
     if interaction.user.id not in ADMIN_ROLES:
@@ -455,14 +651,12 @@ async def create_squad(interaction: discord.Interaction, rola: discord.Role, tyt
     role_id = rola.id
     
     initial_member_ids = []
-    # POPRAWKA KOLORU: używa poprawionej funkcji
     embed = create_squad_embed(interaction.guild, author_name, initial_member_ids, tytul) 
     view = SquadView(0, role_id)
     
     content = f"{rola.mention}"
     sent = await interaction.channel.send(content=content, embed=embed, view=view)
     
-    # Zapisanie danych składu
     squads[sent.id] = {
         "role_id": role_id, 
         "member_ids": initial_member_ids, 
@@ -471,18 +665,15 @@ async def create_squad(interaction: discord.Interaction, rola: discord.Role, tyt
         "author_name": author_name,
     }
     
-    # Aktualizacja View z poprawnym ID wiadomości
     view.message_id = sent.id
     await sent.edit(view=view) 
     
-    # Odpowiedź w kanale follow up
     await interaction.followup.send(f"✅ Ogłoszenie o składzie '{tytul}' dla roli {rola.mention} wysłane!", ephemeral=True)
 
 
-# Captures
+# Captures (bez zmian)
 @tree.command(name="create-capt", description="Tworzy ogłoszenie o captures.")
 async def create_capt(interaction: discord.Interaction):
-    # KLUCZOWA POPRAWKA: Defer
     await interaction.response.defer(ephemeral=True) 
     
     author_name = interaction.user.display_name
@@ -498,10 +689,9 @@ async def create_capt(interaction: discord.Interaction):
     
     await interaction.followup.send("Ogłoszenie o captures wysłane!", ephemeral=True)
 
-# AirDrop
+# AirDrop (bez zmian)
 @tree.command(name="airdrop", description="Tworzy ogłoszenie o AirDropie")
 async def airdrop_command(interaction: discord.Interaction, channel: discord.TextChannel, voice: discord.VoiceChannel, role: discord.Role, opis: str):
-    # KLUCZOWA POPRAWKA: Defer
     await interaction.response.defer(ephemeral=True)
     view = AirdropView(0, opis, voice, interaction.user.display_name)
     embed = view.make_embed(interaction.guild)
@@ -517,10 +707,9 @@ async def airdrop_command(interaction: discord.Interaction, channel: discord.Tex
     }
     await interaction.followup.send("✅ AirDrop utworzony!", ephemeral=True)
 
-# Eventy Zancudo / Cayo
+# Eventy Zancudo / Cayo (bez zmian)
 @tree.command(name="ping-zancudo", description="Wysyła ogłoszenie o ataku na Fort Zancudo.")
 async def ping_zancudo(interaction: discord.Interaction, role: discord.Role, channel: discord.VoiceChannel):
-    # KLUCZOWA POPRAWKA: Defer
     await interaction.response.defer(ephemeral=True)
     embed = discord.Embed(title="Atak na FORT ZANCUDO!", description=f"Zapraszamy na {channel.mention}!", color=discord.Color(0xFF0000))
     embed.set_image(url=ZANCUDO_IMAGE_URL)
@@ -531,7 +720,6 @@ async def ping_zancudo(interaction: discord.Interaction, role: discord.Role, cha
 
 @tree.command(name="ping-cayo", description="Wysyła ogłoszenie o ataku na Cayo Perico.")
 async def ping_cayo(interaction: discord.Interaction, role: discord.Role, channel: discord.VoiceChannel):
-    # KLUCZOWA POPRAWKA: Defer
     await interaction.response.defer(ephemeral=True)
     embed = discord.Embed(title="Atak na CAYO PERICO!", description=f"Zapraszamy na {channel.mention}!", color=discord.Color(0xFFAA00))
     embed.set_image(url=CAYO_IMAGE_URL)
@@ -540,10 +728,9 @@ async def ping_cayo(interaction: discord.Interaction, role: discord.Role, channe
     events["cayo"][sent.id] = {"participants": [], "message": sent, "channel_id": sent.channel.id}
     await interaction.followup.send("✅ Ogłoszenie o ataku wysłane!", ephemeral=True)
 
-# Lista wszystkich zapisanych
+# Lista wszystkich zapisanych (bez zmian)
 @tree.command(name="list-all", description="Pokazuje listę wszystkich zapisanych")
 async def list_all(interaction: discord.Interaction):
-    # KLUCZOWA POPRAWKA: Defer
     await interaction.response.defer(ephemeral=True)
     desc = ""
     for name, mid, data in get_all_active_enrollments():
@@ -558,7 +745,7 @@ async def list_all(interaction: discord.Interaction):
     embed = discord.Embed(title="📋 Lista wszystkich zapisanych i składów", description=desc, color=discord.Color.blue())
     await interaction.followup.send(embed=embed, ephemeral=True)
 
-# Set status
+# Set status (bez zmian)
 @tree.command(name="set-status", description="Zmienia status i aktywność bota (tylko admini)")
 async def set_status(interaction: discord.Interaction, status: str, opis_aktywnosci: str = None, typ_aktywnosci: str = None, url_stream: str = None):
     if interaction.user.id not in STATUS_ADMINS:
@@ -625,7 +812,7 @@ async def set_status(interaction: discord.Interaction, status: str, opis_aktywno
 
     await interaction.response.send_message(response_msg, ephemeral=True)
 
-# Wypisz z capt
+# Wypisz z capt (bez zmian)
 class RemoveEnrollmentView(ui.View):
     def __init__(self, member_to_remove: discord.Member):
         super().__init__(timeout=180)
@@ -709,7 +896,7 @@ async def remove_from_enrollment(interaction: discord.Interaction, członek: dis
         ephemeral=True
     )
 
-# Wpisz na capt
+# Wpisz na capt (bez zmian)
 class AddEnrollmentView(ui.View):
     def __init__(self, member_to_add: discord.Member):
         super().__init__(timeout=180)
@@ -792,7 +979,6 @@ async def add_to_enrollment(interaction: discord.Interaction, członek: discord.
         view=AddEnrollmentView(członek), 
         ephemeral=True
     )
-
 
 # --- Start bota ---
 def run_discord_bot():
