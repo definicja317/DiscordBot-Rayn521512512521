@@ -147,10 +147,13 @@ class EnrollmentSelectMenu(ui.Select):
         target_dict = {}
         if type_str == "captures":
             target_dict = captures
+            ViewClass = CapturesView
         elif type_str == "airdrop":
             target_dict = airdrops
+            ViewClass = AirdropView
         elif type_str in events:
             target_dict = events[type_str]
+            ViewClass = EventView
 
         if msg_id in target_dict:
             participants = target_dict[msg_id].get("participants", [])
@@ -191,15 +194,18 @@ class EnrollmentSelectMenu(ui.Select):
             if data and data.get("message"):
                 message = data["message"]
                 
-                # Użyjmy odpowiedniego widoku, aby odświeżyć embed
+                # Użyjemy odpowiedniego widoku, aby odświeżyć embed
+                author_name = interaction.guild.get_member(data['author']).display_name if interaction.guild.get_member(data['author']) else "Admin"
+                
                 if type_str == "captures":
-                    new_view = CapturesView(msg_id, interaction.guild.get_member(data['author']).display_name if interaction.guild.get_member(data['author']) else "Admin")
+                    new_view = ViewClass(msg_id, author_name)
                     new_embed = new_view.make_embed(interaction.guild)
                 elif type_str == "airdrop":
-                    new_view = AirdropView(msg_id, data["description"], interaction.guild.get_channel(data["voice_channel_id"]), interaction.guild.get_member(data['author']).display_name if interaction.guild.get_member(data['author']) else "Admin")
+                    voice_channel = client.get_channel(data["voice_channel_id"])
+                    new_view = ViewClass(msg_id, data["description"], voice_channel, author_name)
                     new_embed = new_view.make_embed(interaction.guild)
                 elif type_str in events:
-                    new_view = EventView(msg_id, type_str, interaction.guild.get_member(data['author']).display_name if interaction.guild.get_member(data['author']) else "Admin")
+                    new_view = ViewClass(msg_id, type_str, author_name)
                     new_embed = new_view.make_embed(interaction.guild)
                 
                 await message.edit(embed=new_embed, view=new_view)
@@ -289,7 +295,7 @@ class AirdropView(ui.View):
         await interaction.message.edit(embed=self.make_embed(interaction.guild), view=self)
         await interaction.followup.send("❌ Opuściłeś(aś).", ephemeral=True)
 
-# CapturesView (bez zmian, ale wymaga, aby make_embed było spójne)
+# CapturesView (z poprawną obsługą image_url)
 class CapturesView(ui.View):
     def __init__(self, capture_id: int, author_name: str): 
         super().__init__(timeout=None)
@@ -352,8 +358,23 @@ class CapturesView(ui.View):
 
     @ui.button(label="🎯 Pickuj osoby", style=discord.ButtonStyle.blurple)
     async def pick_button(self, interaction: discord.Interaction, button: ui.Button):
-        # ... Logika pickowania (bez zmian) ...
-        await interaction.response.send_message("Logika pickowania bez zmian (wyświetli select menu).", ephemeral=True)
+        # Defer, bo wysłanie nowego view zajmuje czas
+        await interaction.response.defer(ephemeral=True)
+        
+        # Sprawdzanie uprawnień (logika uproszczona)
+        if PICK_ROLE_ID not in [r.id for r in interaction.user.roles] and interaction.user.id not in ADMIN_ROLES:
+            await interaction.followup.send("⛔ Brak uprawnień do pickowania osób!", ephemeral=True)
+            return
+
+        participants = captures.get(self.capture_id, {}).get("participants", [])
+        if not participants:
+            await interaction.followup.send("Nikt się nie zapisał!", ephemeral=True)
+            return
+            
+        pick_view = PickPlayersView(self.capture_id)
+        pick_view.add_item(PlayerSelectMenu(self.capture_id, interaction.guild))
+        
+        await interaction.followup.send("Wybierz do 25 graczy:", view=pick_view, ephemeral=True)
 
 # EventView (Nowa klasa dla Zancudo/Cayo)
 class EventView(ui.View):
@@ -374,7 +395,7 @@ class EventView(ui.View):
         voice_channel = guild.get_channel(data.get("voice_channel_id"))
         role = guild.get_role(data.get("role_id"))
         
-        description_text = f"🚨 {role.mention if role else 'Ogłoszenie'}! Zbiórka na: **{voice_channel.mention if voice_channel else 'Nieznany kanał'}**."
+        description_text = f"🚨 **{role.mention if role else 'Ogłoszenie'}!** Zbiórka na: **{voice_channel.mention if voice_channel else 'Nieznany kanał'}**."
         
         embed = discord.Embed(title=title, description=description_text, color=discord.Color.red())
         embed.set_image(url=image_url)
@@ -420,8 +441,118 @@ class EventView(ui.View):
         else:
             await interaction.response.send_message("Nie jesteś zapisany(a).", ephemeral=True)
 
-# Widoki Squad (bez zmian)
-# ... [Pozostałe klasy widoków (PickPlayersView, SquadView, EditSquadView) pozostają bez zmian] ...
+# Funkcje i Widoki Squad (dla kompletności kodu)
+# =======================================================
+def create_squad_embed(guild: discord.Guild, author_name: str, member_ids: list[int], title: str = "Main Squad"):
+    """Tworzy embed dla Squadu na podstawie listy ID."""
+    
+    member_lines = []
+    
+    for i, uid in enumerate(member_ids):
+        member = guild.get_member(uid)
+        if member:
+            member_lines.append(f"{i+1}- {member.mention} | **{member.display_name}**")
+        else:
+            member_lines.append(f"{i+1}- <@{uid}> (Nieznany/Opuścił serwer)")
+            
+    members_list_str = "\n".join(member_lines) if member_lines else "Brak członków składu."
+    count = len(member_ids)
+        
+    embed = discord.Embed(
+        title=title, 
+        description=f"Oto aktualny skład:\n\n{members_list_str}", 
+        color=discord.Color(0xFFFFFF)
+    )
+    embed.set_thumbnail(url=LOGO_URL)
+    
+    embed.add_field(name="Liczba członków:", value=f"**{count}**", inline=False)
+    
+    embed.set_footer(text=f"Aktywowane przez {author_name}")
+    return embed
+
+
+class EditSquadView(ui.View):
+    """Widok zawierający menu wyboru użytkowników i przycisk Potwierdź edycję."""
+    def __init__(self, message_id: int):
+        super().__init__(timeout=180) 
+        self.message_id = message_id
+        
+        self.add_item(ui.UserSelect(
+            placeholder="Wybierz członków składu (max 25)",
+            max_values=25, 
+            custom_id="squad_member_picker"
+        ))
+
+    @ui.button(label="✅ Potwierdź edycję", style=discord.ButtonStyle.green)
+    async def confirm_edit(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer(ephemeral=True)
+
+        select_menu = next((item for item in self.children if item.custom_id == "squad_member_picker"), None)
+        selected_ids = []
+        if select_menu and select_menu.values:
+            selected_ids = [user.id for user in select_menu.values]
+        
+        squad_data = squads.get(self.message_id)
+
+        if not squad_data:
+            await interaction.followup.send("Błąd: Nie znaleziono danych tego składu.", ephemeral=True)
+            return
+
+        squad_data["member_ids"] = selected_ids
+        
+        message = squad_data.get("message")
+        author_name = squad_data.get("author_name", "Bot")
+        title = "Main Squad"
+        if message and message.embeds:
+            title = message.embeds[0].title
+            
+        new_embed = create_squad_embed(interaction.guild, author_name, selected_ids, title)
+        
+        if message and hasattr(message, 'edit'):
+            new_squad_view = SquadView(self.message_id, squad_data.get("role_id"))
+            
+            role_id = squad_data.get("role_id")
+            content = f"<@&{role_id}> **Zaktualizowano Skład!**" if role_id else ""
+            
+            await message.edit(content=content, embed=new_embed, view=new_squad_view)
+            
+            await interaction.followup.send(content="✅ Skład został pomyślnie zaktualizowany! Wróć do głównej wiadomości składu.", ephemeral=True)
+        else:
+            await interaction.followup.send(content="Błąd: Nie można odświeżyć wiadomości składu. Być może bot został zrestartowany.", ephemeral=True)
+
+
+class SquadView(ui.View):
+    """Główny widok składu z przyciskiem do przejścia do edycji."""
+    def __init__(self, message_id: int, role_id: int):
+        super().__init__(timeout=None)
+        self.message_id = message_id
+        self.role_id = role_id
+
+    @ui.button(label="Zarządzaj składem (ADMIN)", style=discord.ButtonStyle.blurple)
+    async def manage_squad_button(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer(ephemeral=True) 
+
+        if interaction.user.id not in ADMIN_ROLES:
+            await interaction.followup.send("⛔ Brak uprawnień do zarządzania składem!", ephemeral=True)
+            return
+
+        squad_data = squads.get(self.message_id)
+        if not squad_data:
+            await interaction.followup.send("Błąd: Nie znaleziono danych tego składu.", ephemeral=True)
+            return
+            
+        edit_view = EditSquadView(self.message_id)
+            
+        await interaction.followup.send(
+            "Wybierz listę członków składu (użyj menu rozwijanego, max 25 osób). Po wybraniu naciśnij 'Potwierdź edycję':", 
+            view=edit_view, 
+            ephemeral=True
+        )
+
+# =======================================================
+# <<< KONIEC FUNKCJI DLA SQUADÓW >>>
+# =======================================================
+
 
 # =====================
 #       PANEL ZARZĄDZANIA (ManagementPanelView)
@@ -499,15 +630,27 @@ class ManagementPanelView(ui.View):
 # =====================
 @client.event
 async def on_ready():
-    # ... [Logika przywracania widoków - bez zmian] ...
-    # Symulacja reszty on_ready
+    # Przywracanie widoków (np. SquadView i AirdropView, aby przyciski działały po restarcie)
+    for msg_id, data in squads.items():
+         try:
+             channel = client.get_channel(data["channel_id"])
+             if channel:
+                 data["message"] = await channel.fetch_message(msg_id)
+                 client.add_view(SquadView(msg_id, data["role_id"]))
+         except Exception as e:
+             print(f"Błąd przy przywracaniu widoku Squad {msg_id}: {e}")
+             
+    # Można dodać logikę przywracania Captures/AirDrop/Event, jeśli są potrzebne przyciski
+    # Jeśli nie, wystarczy synchronizacja
+             
+    # Synchronizacja komend
     await tree.sync()
     print(f"✅ Zalogowano jako {client.user}")
 
-# Panel Administracyjny (bez zmian)
+
+# Panel Administracyjny
 @tree.command(name="panel", description="Wyświetla panel do tworzenia ogłoszeń (tylko Admini).")
 async def panel_command(interaction: discord.Interaction):
-    # ... [Logika komendy /panel - bez zmian] ...
     await interaction.response.defer(ephemeral=True)
     if interaction.user.id not in ADMIN_ROLES:
         await interaction.followup.send("⛔ Brak uprawnień do użycia tej komendy!", ephemeral=True)
@@ -543,7 +686,7 @@ async def create_capt(
     if interaction.user.id not in ADMIN_ROLES:
         await interaction.followup.send("⛔ Brak uprawnień do użycia tej komendy!", ephemeral=True)
         return
-
+        
     description_text = "Zapraszamy wszystkich chętnych do wzięcia udziału w nadchodzących Captures! Kliknij przycisk poniżej, aby się zapisać."
     
     embed = discord.Embed(title="CAPTURES!", description=description_text, color=discord.Color(0xFFFFFF))
@@ -561,6 +704,7 @@ async def create_capt(
     content_message = f"{role_mention} **NOWE CAPTURES!** Ogłoszenie na kanale: {channel.mention}{timer_info}"
     
     try:
+        # Wysyłamy wiadomość z View z tymczasowym ID 0
         message = await channel.send(
             content=content_message,
             embed=embed,
@@ -570,7 +714,7 @@ async def create_capt(
         await interaction.followup.send(f"❌ Błąd podczas wysyłania wiadomości na kanale {channel.mention}. Sprawdź uprawnienia bota. Błąd: {e}", ephemeral=True)
         return
 
-    # Zapisanie do pamięci
+    # Zapisanie do pamięci z poprawnym message.id
     captures[message.id] = {
         "participants": [],
         "author": interaction.user.id,
@@ -580,7 +724,7 @@ async def create_capt(
         "image_url": image_url
     }
     
-    # Aktualizacja view z poprawnym ID
+    # Aktualizacja View z poprawnym ID
     view = CapturesView(message.id, interaction.user.display_name)
     await message.edit(view=view)
     
@@ -628,7 +772,7 @@ async def airdrop(
         message = await channel.send(
             content=content_message,
             embed=embed,
-            view=AirdropView(0, description, voice_channel, interaction.user.display_name)
+            view=AirdropView(0, description, voice_channel.id, interaction.user.display_name)
         )
     except Exception as e:
         await interaction.followup.send(f"❌ Błąd podczas wysyłania wiadomości na kanale {channel.mention}. Sprawdź uprawnienia bota. Błąd: {e}", ephemeral=True)
@@ -645,7 +789,7 @@ async def airdrop(
         "role_id": role.id if role else None
     }
     
-    view = AirdropView(message.id, description, voice_channel, interaction.user.display_name)
+    view = AirdropView(message.id, description, voice_channel.id, interaction.user.display_name)
     await message.edit(view=view)
 
     confirmation_message = await interaction.followup.send(f"✅ Ogłoszenie **AIRDROP** wysłano na {channel.mention}.", ephemeral=True)
@@ -671,7 +815,7 @@ async def create_event_ping(
     image_url = ZANCUDO_IMAGE_URL if event_type == "zancudo" else CAYO_IMAGE_URL
     title = "PING ZANCUDO" if event_type == "zancudo" else "PING CAYO"
     
-    description_text = f"🚨 {role.mention} **{title}**! Zbiórka na: **{voice_channel.mention}**."
+    description_text = f"🚨 **{role.mention}**! Zbiórka na: **{voice_channel.mention}**."
     
     embed = discord.Embed(
         title=title, 
@@ -843,12 +987,23 @@ async def remove_from_enrollment(interaction: discord.Interaction, członek: dis
         ephemeral=True
     )
 
-# --- Start bota ---
-def run_discord_bot():
-    # ... [Logika uruchamiania Flask i Bota - bez zmian] ...
-    # Symulacja reszty run_discord_bot
-    pass
 
-# Upewnij się, że na końcu pliku masz tylko kod startujący
-# run_discord_bot()
-# client.run(token)
+# =====================
+#       START BOTA (DLA RENDER)
+# =====================
+def run_discord_bot():
+    """
+    Uruchamia bota i serwer Flask w osobnym wątku dla utrzymania ciągłości
+    na platformach hostingowych takich jak Render.
+    """
+    try:
+        # Uruchamiamy Flask w osobnym wątku
+        threading.Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))).start()
+        # Uruchamiamy bota
+        client.run(token)
+    except Exception as e:
+        print(f"Błąd podczas uruchamiania bota: {e}")
+        sys.exit(1)
+
+if __name__ == '__main__':
+    run_discord_bot()
