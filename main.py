@@ -5,7 +5,7 @@ import sys
 import threading
 from flask import Flask
 from dotenv import load_dotenv
-from datetime import datetime, timedelta 
+from datetime import datetime, timedelta
 import re 
 import traceback 
 import time 
@@ -25,49 +25,47 @@ if not token:
     sys.exit(1)
 
 # --- Ustawienia ---
-# WAŻNE: Wprowadź swoje faktyczne ID ról/użytkowników.
-PICK_ROLE_ID = 1413424476770664499 
-STATUS_ADMINS = [1184620388425138183, 1409225386998501480, 1007732573063098378, 364869132526551050]
+PICK_ROLE_ID = 1413424476770664499 # ID Roli, która może 'pickować' graczy
+STATUS_ADMINS = [1184620388425138183, 1409225386998501480, 1007732573063098378, 364869132526551050] # ID Użytkowników-Adminów
 ADMIN_ROLES = STATUS_ADMINS 
 BOT_ADMIN_ROLE_ID = 1413424476770664499 
 ZANCUDO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414194392214011974/image.png"
 CAYO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414204332747915274/image.png"
-LOGO_URL = "https://cdn.discordapp.com/attachments/1184622314302754857/1420796249484824757/RInmPqb.webp?ex=68d6b31e&is=68d5619e&hm=0cdf3f7cbb269b12c9f47d7eb034e40a8d830ff502ca9ceacb3d7d02d3819413&"
+LOGO_URL = "https://cdn.discordapp.com/attachments/1184622314302754857/1420796249484824757/RInmPqb.webp?ex=68d6b31e&is=68d5619e&hm=0cdf3f7cbb269b12c9f47d7eb034e40a8d830ff502ca9ceacb3d7902d3819413&"
 
-# --- Funkcja do obsługi czasu (Poprawka: rozwiązuje błąd ValueError i czas) ---
+# --- POPRAWKA: Funkcja do obsługi czasu (rozwiązuje błąd ValueError) ---
 def create_timestamp(czas_str: str, data_str: str = None) -> int:
-    """Konwertuje HH:MM i opcjonalną datę DD.MM.RRRR lub DD.MM na Unix Timestamp (UTC)."""
+    """Konwertuje HH:MM i opcjonalną datę DD.MM.RRRR lub DD.MM na Unix Timestamp."""
     
-    # POPRAWKA: Użycie re.search zamiast re.match i obsługa formatów z/bez spacji
-    match = re.search(r"(\d{1,2}):(\d{2})", czas_str.replace(" ", ""))
+    match = re.match(r"(\d{1,2}):(\d{2})", czas_str)
     if not match:
         raise ValueError("Nieprawidłowy format czasu. Użyj HH:MM (np. 21:30).")
     hour, minute = map(int, match.groups())
 
-    # Zawsze używaj teraz z UTC, aby uniknąć problemów ze strefą czasową serwera
-    now_utc = datetime.now(datetime.UTC).replace(tzinfo=None)
-    
-    dt = now_utc.date()
+    # Użycie czasu UTC, aby uniknąć problemów ze strefami czasowymi
+    today = discord.utils.utcnow() # POPRAWKA: Użycie discord.utils.utcnow() zamiast datetime.now()
     if data_str:
         try:
-            # Próba DD.MM.RRRR
-            dt = datetime.strptime(data_str, "%d.%m.%Y").date()
+            # Wymuszenie datetime.strptime, aby utworzyć obiekt datetime z czasu lokalnego (bez tzinfo)
+            dt_base = datetime.strptime(data_str, "%d.%m.%Y")
         except ValueError:
             try:
-                # Próba DD.MM (z bieżącym rokiem)
-                dt = datetime.strptime(data_str, "%d.%m").date()
-                dt = dt.replace(year=now_utc.year)
+                dt_base = datetime.strptime(data_str, "%d.%m")
+                dt_base = dt_base.replace(year=today.year)
             except ValueError:
                 raise ValueError("Nieprawidłowy format daty. Użyj DD.MM.RRRR lub DD.MM (np. 27.09.2025).")
-    
-    # Utworzenie finalnej daty w UTC
-    final_dt = datetime(dt.year, dt.month, dt.day, hour, minute, 0, 0)
-    
-    # Przesunięcie do jutra, jeśli czas już minął i nie podano daty
-    if final_dt < now_utc and not data_str:
+        
+        # Łączenie daty i czasu, nadanie strefy czasowej UTC
+        final_dt = dt_base.replace(hour=hour, minute=minute, second=0, microsecond=0, tzinfo=today.tzinfo)
+
+    else:
+        # Łączenie dzisiejszej daty z podanym czasem, nadanie strefy czasowej UTC
+        final_dt = today.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+    # Jeśli czas dzisiejszy jest już przeszły, przesuń na jutro (tylko jeśli nie podano daty)
+    if final_dt < today and not data_str:
         final_dt += timedelta(days=1)
     
-    # Unix Timestamp powinien być zawsze w UTC
     return int(final_dt.timestamp())
 # --- KONIEC FUNKCJI TIMERA ---
 
@@ -79,28 +77,31 @@ client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
 
-# --- Globalna obsługa błędów ---
+# --- POPRAWKA: Globalna obsługa błędów (rozwiązuje AttributeError i loguje 10062/ValueError) ---
 @tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     print(f"Globalny błąd komendy {interaction.command.name} (użytkownik: {interaction.user.display_name}):")
     traceback.print_exc() 
     
-    if isinstance(error, app_commands.CommandInvokeError): 
-        # Obsługa błędu formatu czasu
+    # Obsługa błędu AppCommandInvokeError, który zawiera oryginalny wyjątek
+    if isinstance(error, app_commands.CommandInvokeError): # POPRAWKA: Używamy app_commands.CommandInvokeError
+        # Obsługa błędu ValueError z funkcji create_timestamp
         if isinstance(error.original, ValueError):
+            # Zapewnienie odpowiedzi, jeśli interakcja nie została jeszcze obsłużona
             if not interaction.response.is_done():
                  await interaction.response.send_message(f"❌ Błąd formatu czasu/daty: **{error.original}**", ephemeral=True)
             else:
                  await interaction.followup.send(f"❌ Błąd formatu czasu/daty: **{error.original}**", ephemeral=True)
             return
             
-        # Obsługa błędu 10062 (Unknown interaction)
+        # POPRAWKA: Obsługa błędu 404/10062 (Unknown interaction)
         if isinstance(error.original, discord.NotFound) and "10062" in str(error.original):
             print("Wykryto i pominięto błąd 10062 (Unknown interaction).")
             return
             
     error_name = type(error).__name__
     
+    # Wysłanie ogólnej wiadomości o błędzie (jeśli interakcja nadal jest aktywna)
     try:
         if interaction.response.is_done():
             await interaction.followup.send(f"❌ Wystąpił błąd w kodzie: `{error_name}`. Sprawdź logi bota!", ephemeral=True)
@@ -109,6 +110,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
             
     except discord.HTTPException:
         print("Nie udało się wysłać wiadomości o błędzie do użytkownika, prawdopodobnie interakcja wygasła (10062).")
+# --- KONIEC GLOBALNEJ OBSŁUGI BŁĘDÓW ---
 
 
 # --- Pamięć zapisów ---
@@ -120,37 +122,29 @@ squads = {}
 # <<< ZARZĄDZANIE ZAPISAMI >>>
 def get_all_active_enrollments():
     all_enrollments = []
-    # Sprawdzenie czy 'participants' istnieje
     for msg_id, data in captures.items():
-        if data.get("participants") is not None:
-             all_enrollments.append(("Captures", msg_id, data))
-             
+        all_enrollments.append(("Captures", msg_id, data))
     for msg_id, data in airdrops.items():
-        if data.get("participants") is not None:
-            all_enrollments.append(("AirDrop", msg_id, data))
-            
+        all_enrollments.append(("AirDrop", msg_id, data))
     for etype, msgs in events.items():
         for msg_id, data in msgs.items():
-            if data.get("participants") is not None:
-                all_enrollments.append((etype.capitalize(), msg_id, data))
-                
+            all_enrollments.append((etype.capitalize(), msg_id, data))
     return all_enrollments
 
 class EnrollmentSelectMenu(ui.Select):
-    """Menu wyboru do wybierania aktywnego zapisu."""
     def __init__(self, action: str):
         self.action = action 
         enrollments = get_all_active_enrollments()
         options = []
         for name, msg_id, data in enrollments:
             count = len(data.get("participants", []))
-            label_text = f"{name} (ID: {msg_id}) - {count} os."
             options.append(
                 discord.SelectOption(
-                    label=label_text[:100], 
+                    label=f"{name} (ID: {msg_id}) - {count} os.", 
                     value=f"{name.lower()}-{msg_id}"
                 )
             )
+        # custom_id jest wymagany dla komponentów (Select)
         super().__init__(
             placeholder=f"Wybierz zapis:",
             max_values=1,
@@ -159,24 +153,24 @@ class EnrollmentSelectMenu(ui.Select):
             custom_id=f"enrollment_select_{action}"
         )
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer() 
+        pass 
 # <<< KONIEC ZARZĄDZANIE ZAPISAMI >>>
 
 # =====================
 #       AIRDROP & CAPTURES VIEWS
 # =====================
 class AirdropView(ui.View):
+    # POPRAWKA: Usunięto custom_id z __init__, aby naprawić TypeError
     def __init__(self, message_id: int, description: str, voice_channel: discord.VoiceChannel, author_name: str, timestamp: int = None):
-        # POPRAWKA BŁĘDU: Usunięto 'custom_id' z super().__init__()
-        super().__init__(timeout=None) 
+        super().__init__(timeout=None)
         self.message_id = message_id
         self.description = description
         self.voice_channel = voice_channel
-        # POPRAWKA: Ładowanie uczestników
-        self.participants: list[int] = airdrops.get(message_id, {}).get("participants", [])
+        self.participants: list[int] = [] 
         self.author_name = author_name
-        self.timestamp = timestamp 
-        self.custom_id = f"airdrop_view:{message_id}"
+        self.timestamp = timestamp
+        # Ustawienie custom_id jako atrybutu, a nie w super().__init__()
+        self.view_custom_id = f"airdrop_view:{message_id}" 
 
     def make_embed(self, guild: discord.Guild):
         embed = discord.Embed(title="🎁 AirDrop!", description=self.description, color=discord.Color(0xFFFFFF))
@@ -203,7 +197,7 @@ class AirdropView(ui.View):
 
     @ui.button(label="✅ Dołącz", style=discord.ButtonStyle.green, custom_id="airdrop_join")
     async def join(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.defer() 
+        await interaction.response.defer() # POPRAWKA: defer
         
         if interaction.user.id in self.participants:
             await interaction.followup.send("Już jesteś zapisany(a).", ephemeral=True)
@@ -214,14 +208,14 @@ class AirdropView(ui.View):
              return
              
         self.participants.append(interaction.user.id)
-        airdrops[self.message_id]["participants"] = self.participants
+        airdrops[self.message_id]["participants"].append(interaction.user.id)
         
         await interaction.message.edit(embed=self.make_embed(interaction.guild), view=self)
         await interaction.followup.send("✅ Dołączyłeś(aś)!", ephemeral=True)
 
     @ui.button(label="❌ Opuść", style=discord.ButtonStyle.red, custom_id="airdrop_leave")
     async def leave(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.defer() 
+        await interaction.response.defer() # POPRAWKA: defer
         
         if interaction.user.id not in self.participants:
             await interaction.followup.send("Nie jesteś zapisany(a).", ephemeral=True)
@@ -232,7 +226,7 @@ class AirdropView(ui.View):
              return
              
         self.participants.remove(interaction.user.id)
-        airdrops[self.message_id]["participants"] = self.participants
+        airdrops[self.message_id]["participants"].remove(interaction.user.id)
         await interaction.message.edit(embed=self.make_embed(interaction.guild), view=self)
         await interaction.followup.send("❌ Opuściłeś(aś).", ephemeral=True)
 
@@ -248,6 +242,7 @@ class PlayerSelectMenu(ui.Select):
                     discord.SelectOption(label=member.display_name, value=str(member.id))
                 )
 
+        # custom_id jest wymagany dla komponentów (Select)
         super().__init__(
             placeholder="Wybierz do 25 graczy",
             max_values=min(25, len(options)),
@@ -256,18 +251,19 @@ class PlayerSelectMenu(ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer() 
+        await interaction.response.defer() # POPRAWKA: defer
 
 class PickPlayersView(ui.View):
+    # POPRAWKA: Usunięto custom_id z __init__, aby naprawić TypeError
     def __init__(self, capture_id: int):
-        # POPRAWKA BŁĘDU: Usunięto 'custom_id' z super().__init__()
-        super().__init__(timeout=180) 
+        super().__init__(timeout=180)
         self.capture_id = capture_id
-        self.custom_id = f"pick_players_view:{capture_id}" 
-        
+        # Ustawienie custom_id jako atrybutu, a nie w super().__init__()
+        self.view_custom_id = f"pick_players_view:{capture_id}"
+
     @ui.button(label="Potwierdź wybór", style=discord.ButtonStyle.green, custom_id="confirm_pick_button")
     async def confirm_pick(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
         
         select_menu = next((item for item in self.children if isinstance(item, ui.Select)), None)
         
@@ -297,23 +293,23 @@ class PickPlayersView(ui.View):
             value="\n".join(f"{i+1}. {m.mention} | **{m.display_name}**" for i, m in enumerate(selected_members)),
             inline=False
         )
+        # POPRAWKA: Użycie discord.utils.utcnow() dla bezpiecznego czasu UTC
         final_embed.set_footer(text=f"Wystawione przez {interaction.user.display_name} • {discord.utils.utcnow().strftime('%d.%m.%Y %H:%M')}")
         await interaction.followup.send(embed=final_embed)
 
 class CapturesView(ui.View):
+    # POPRAWKA: Usunięto custom_id z __init__, aby naprawić TypeError
     def __init__(self, capture_id: int, author_name: str, image_url: str = None, timestamp: int = None): 
-        # POPRAWKA BŁĘDU: Usunięto 'custom_id' z super().__init__()
-        super().__init__(timeout=None) 
+        super().__init__(timeout=None)
         self.capture_id = capture_id
         self.author_name = author_name
         self.image_url = image_url
-        self.timestamp = timestamp 
-        # POPRAWKA: Ładowanie uczestników
-        self.participants: list[int] = captures.get(capture_id, {}).get("participants", [])
-        self.custom_id = f"captures_view:{capture_id}"
+        self.timestamp = timestamp
+        # Ustawienie custom_id jako atrybutu, a nie w super().__init__()
+        self.view_custom_id = f"captures_view:{capture_id}"
 
     def make_embed(self, guild: discord.Guild):
-        participants_ids = self.participants
+        participants_ids = captures.get(self.capture_id, {}).get("participants", [])
         
         embed = discord.Embed(title="CAPTURES!", description="Kliknij przycisk, aby się zapisać!", color=discord.Color(0xFFFFFF))
         embed.set_thumbnail(url=LOGO_URL) 
@@ -343,51 +339,58 @@ class CapturesView(ui.View):
     @ui.button(label="✅ Wpisz się", style=discord.ButtonStyle.green, custom_id="capt_join")
     async def join_button(self, interaction: discord.Interaction, button: ui.Button):
         user_id = interaction.user.id
+        participants = captures.get(self.capture_id, {}).get("participants", [])
         
-        if user_id not in self.participants:
-            await interaction.response.defer() 
+        if user_id not in participants:
+            await interaction.response.defer() # POPRAWKA: defer
             
             if self.capture_id not in captures:
-                 # Uzupełnienie danych w pamięci, jeśli bot zrestartował
-                 captures[self.capture_id] = {"participants": [], "author_name": self.author_name, "image_url": self.image_url, "timestamp": self.timestamp, "channel_id": interaction.channel_id, "message": interaction.message} 
+                 captures[self.capture_id] = {"participants": [], "author_name": self.author_name, "image_url": self.image_url, "timestamp": self.timestamp} 
                  
-            self.participants.append(user_id)
-            captures[self.capture_id]["participants"] = self.participants
+            captures[self.capture_id]["participants"].append(user_id)
             
-            await interaction.message.edit(embed=self.make_embed(interaction.guild), view=self)
-            await interaction.followup.send("Zostałeś(aś) zapisany(a)!", ephemeral=True)
+            data = captures.get(self.capture_id)
+            if data and data.get("message"):
+                await interaction.message.edit(embed=self.make_embed(interaction.guild), view=self)
+                await interaction.followup.send("Zostałeś(aś) zapisany(a)!", ephemeral=True)
+            else:
+                await interaction.followup.send("Zostałeś(aś) zapisany(a), ale wiadomość ogłoszenia mogła zaginąć po restarcie bota.", ephemeral=True)
         else:
             await interaction.response.send_message("Już jesteś zapisany(a).", ephemeral=True)
 
     @ui.button(label="❌ Wypisz się", style=discord.ButtonStyle.red, custom_id="capt_leave")
     async def leave_button(self, interaction: discord.Interaction, button: ui.Button):
         user_id = interaction.user.id
+        participants = captures.get(self.capture_id, {}).get("participants", [])
         
-        if user_id in self.participants:
-            await interaction.response.defer() 
+        if user_id in participants:
+            await interaction.response.defer() # POPRAWKA: defer
             
             if self.capture_id not in captures:
                  await interaction.followup.send("Błąd: Dane zapisu zaginęły po restarcie bota.", ephemeral=True)
                  return
                  
-            self.participants.remove(user_id)
-            captures[self.capture_id]["participants"] = self.participants
-
-            await interaction.message.edit(embed=self.make_embed(interaction.guild), view=self)
-            await interaction.followup.send("Zostałeś(aś) wypisany(a).", ephemeral=True)
+            captures[self.capture_id]["participants"].remove(user_id)
+            
+            data = captures.get(self.capture_id)
+            if data and data.get("message"):
+                await interaction.message.edit(embed=self.make_embed(interaction.guild), view=self)
+                await interaction.followup.send("Zostałeś(aś) wypisany(a).", ephemeral=True)
+            else:
+                 await interaction.followup.send("Zostałeś(aś) wypisany(a).", ephemeral=True)
         else:
             await interaction.response.send_message("Nie jesteś zapisany(a).", ephemeral=True)
 
     @ui.button(label="🎯 Pickuj osoby", style=discord.ButtonStyle.blurple, custom_id="capt_pick")
     async def pick_button(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
         
         guild_member = interaction.guild.get_member(interaction.user.id)
         if PICK_ROLE_ID not in [r.id for r in guild_member.roles]:
             await interaction.followup.send("⛔ Brak uprawnień!", ephemeral=True)
             return
             
-        participants = self.participants
+        participants = captures.get(self.capture_id, {}).get("participants", [])
         if not participants:
             await interaction.followup.send("Nikt się nie zapisał!", ephemeral=True)
             return
@@ -403,6 +406,8 @@ class CapturesView(ui.View):
 # =======================================================
 
 def create_squad_embed(guild: discord.Guild, author_name: str, member_ids: list[int], title: str = "Main Squad"):
+    """Tworzy embed dla Squadu na podstawie listy ID. POPRAWIONO KOLOR."""
+    
     member_lines = []
     
     for i, uid in enumerate(member_ids):
@@ -430,10 +435,8 @@ def create_squad_embed(guild: discord.Guild, author_name: str, member_ids: list[
 
 class EditSquadView(ui.View):
     def __init__(self, message_id: int):
-        # POPRAWKA BŁĘDU: Usunięto 'custom_id' z super().__init__()
-        super().__init__(timeout=180) 
+        super().__init__(timeout=180, custom_id=f"edit_squad_view:{message_id}") 
         self.message_id = message_id
-        self.custom_id = f"edit_squad_view:{message_id}" 
         
         self.add_item(ui.UserSelect(
             placeholder="Wybierz członków składu (max 25)",
@@ -443,7 +446,7 @@ class EditSquadView(ui.View):
 
     @ui.button(label="✅ Potwierdź edycję", style=discord.ButtonStyle.green, custom_id="confirm_edit_squad")
     async def confirm_edit(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
 
         select_menu = next((item for item in self.children if item.custom_id == "squad_member_picker"), None)
         selected_ids = []
@@ -481,16 +484,16 @@ class EditSquadView(ui.View):
 
 
 class SquadView(ui.View):
+    # POPRAWKA: Usunięto custom_id z __init__ i zastąpiono view_custom_id
     def __init__(self, message_id: int, role_id: int):
-        # POPRAWKA BŁĘDU: Usunięto 'custom_id' z super().__init__()
         super().__init__(timeout=None)
         self.message_id = message_id
         self.role_id = role_id
-        self.custom_id = f"squad_view:{message_id}" 
+        self.view_custom_id = f"squad_view:{message_id}"
 
     @ui.button(label="Zarządzaj składem (ADMIN)", style=discord.ButtonStyle.blurple, custom_id="manage_squad_button")
     async def manage_squad_button(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.defer(ephemeral=True) 
+        await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
 
         guild_member = interaction.guild.get_member(interaction.user.id)
         if not guild_member or BOT_ADMIN_ROLE_ID not in [r.id for r in guild_member.roles]:
@@ -520,7 +523,7 @@ class SquadView(ui.View):
 # =====================
 @client.event
 async def on_ready():
-    # Przywracanie widoków (tylko widoki z timeout=None)
+    # Przywracanie widoków - zmiana custom_id na view_custom_id, jeśli ma być używane
     
     # 1. SQUAD VIEWS
     if squads:
@@ -530,7 +533,10 @@ async def on_ready():
                  channel = client.get_channel(data["channel_id"])
                  if channel:
                      data["message"] = await channel.fetch_message(msg_id)
-                     client.add_view(SquadView(msg_id, data["role_id"]))
+                     view = SquadView(msg_id, data["role_id"])
+                     # Użycie atrybutu view_custom_id do odtworzenia widoku
+                     view.custom_id = view.view_custom_id 
+                     client.add_view(view)
              except Exception as e:
                  print(f"Błąd przy przywracaniu widoku Squad {msg_id}: {e}")
                  
@@ -544,9 +550,9 @@ async def on_ready():
                      data["message"] = await channel.fetch_message(msg_id)
                      image_url = data.get("image_url")
                      timestamp = data.get("timestamp")
-                     # POPRAWKA: Przekazanie 'participants' do widoku przy tworzeniu
                      view = CapturesView(msg_id, data["author_name"], image_url, timestamp)
-                     view.participants = data.get("participants", [])
+                     # Użycie atrybutu view_custom_id do odtworzenia widoku
+                     view.custom_id = view.view_custom_id 
                      client.add_view(view)
              except Exception as e:
                  print(f"Błąd przy przywracaniu widoku Captures {msg_id}: {e}")
@@ -565,6 +571,8 @@ async def on_ready():
                          timestamp = data.get("timestamp")
                          view = AirdropView(msg_id, data["description"], voice_channel, data["author_name"], timestamp)
                          view.participants = data.get("participants", []) 
+                         # Użycie atrybutu view_custom_id do odtworzenia widoku
+                         view.custom_id = view.view_custom_id
                          client.add_view(view)
                      else:
                          print(f"Ostrzeżenie: Nie znaleziono kanału głosowego dla AirDrop {msg_id}. Pomijam przywracanie widoku.")
@@ -578,7 +586,7 @@ async def on_ready():
 # Komenda SQUAD
 @tree.command(name="create-squad", description="Tworzy ogłoszenie o składzie z możliwością edycji.")
 async def create_squad(interaction: discord.Interaction, rola: discord.Role, tytul: str = "Main Squad"):
-    await interaction.response.defer(ephemeral=True) 
+    await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
 
     if interaction.user.id not in ADMIN_ROLES:
         await interaction.followup.send("⛔ Brak uprawnień!", ephemeral=True)
@@ -602,9 +610,9 @@ async def create_squad(interaction: discord.Interaction, rola: discord.Role, tyt
         "author_name": author_name,
     }
     
-    # Ustawienie poprawnego ID wiadomości i custom_id dla widoku (teraz już zaimplementowane w __init__)
     view.message_id = sent.id
-    view.custom_id = f"squad_view:{sent.id}"
+    # Użycie view_custom_id, aby prawidłowo ustawić custom_id w wysłanej wiadomości
+    view.custom_id = view.view_custom_id 
     await sent.edit(view=view) 
     
     await interaction.followup.send(f"✅ Ogłoszenie o składzie '{tytul}' dla roli {rola.mention} wysłane!", ephemeral=True)
@@ -613,9 +621,11 @@ async def create_squad(interaction: discord.Interaction, rola: discord.Role, tyt
 # Komenda CAPTURES (Z TIMMEREM)
 @tree.command(name="create-capt", description="Tworzy ogłoszenie o captures z opcjonalnym timerem i zdjęciem.")
 async def create_capt(interaction: discord.Interaction, czas_zakonczenia: str, data_zakonczenia: str = None, link_do_zdjecia: str = None):
-    await interaction.response.defer(ephemeral=True) 
+    await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
     
+    # Wywołanie funkcji create_timestamp - błędy obsługiwane w tree.error
     timestamp = create_timestamp(czas_zakonczenia, data_zakonczenia)
+    
     author_name = interaction.user.display_name
     
     view = CapturesView(0, author_name, link_do_zdjecia, timestamp) 
@@ -632,9 +642,9 @@ async def create_capt(interaction: discord.Interaction, czas_zakonczenia: str, d
         "timestamp": timestamp 
     }
     
-    # Ustawienie poprawnego ID wiadomości i custom_id dla widoku (teraz już zaimplementowane w __init__)
     view.capture_id = sent.id 
-    view.custom_id = f"captures_view:{sent.id}"
+    # Użycie view_custom_id, aby prawidłowo ustawić custom_id w wysłanej wiadomości
+    view.custom_id = view.view_custom_id 
     await sent.edit(view=view) 
     
     await interaction.followup.send("Ogłoszenie o captures wysłane!", ephemeral=True)
@@ -642,8 +652,9 @@ async def create_capt(interaction: discord.Interaction, czas_zakonczenia: str, d
 # Komenda AirDrop (Z TIMMEREM)
 @tree.command(name="airdrop", description="Tworzy ogłoszenie o AirDropie z timerem.")
 async def airdrop_command(interaction: discord.Interaction, channel: discord.TextChannel, voice: discord.VoiceChannel, role: discord.Role, opis: str, czas_zakonczenia: str, data_zakonczenia: str = None):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
     
+    # Wywołanie funkcji create_timestamp - błędy obsługiwane w tree.error
     timestamp = create_timestamp(czas_zakonczenia, data_zakonczenia)
         
     view = AirdropView(0, opis, voice, interaction.user.display_name, timestamp) 
@@ -660,9 +671,9 @@ async def airdrop_command(interaction: discord.Interaction, channel: discord.Tex
         "timestamp": timestamp 
     }
     
-    # Ustawienie poprawnego ID wiadomości i custom_id dla widoku (teraz już zaimplementowane w __init__)
     view.message_id = sent.id
-    view.custom_id = f"airdrop_view:{sent.id}"
+    # Użycie view_custom_id, aby prawidłowo ustawić custom_id w wysłanej wiadomości
+    view.custom_id = view.view_custom_id
     await sent.edit(view=view)
     
     await interaction.followup.send("✅ AirDrop utworzony!", ephemeral=True)
@@ -670,7 +681,7 @@ async def airdrop_command(interaction: discord.Interaction, channel: discord.Tex
 # Eventy Zancudo / Cayo
 @tree.command(name="ping-zancudo", description="Wysyła ogłoszenie o ataku na Fort Zancudo.")
 async def ping_zancudo(interaction: discord.Interaction, role: discord.Role, channel: discord.VoiceChannel):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
     embed = discord.Embed(title="Atak na FORT ZANCUDO!", description=f"Zapraszamy na {channel.mention}!", color=discord.Color(0xFF0000))
     embed.set_image(url=ZANCUDO_IMAGE_URL)
     embed.set_thumbnail(url=LOGO_URL) 
@@ -680,7 +691,7 @@ async def ping_zancudo(interaction: discord.Interaction, role: discord.Role, cha
 
 @tree.command(name="ping-cayo", description="Wysyła ogłoszenie o ataku na Cayo Perico.")
 async def ping_cayo(interaction: discord.Interaction, role: discord.Role, channel: discord.VoiceChannel):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
     embed = discord.Embed(title="Atak na CAYO PERICO!", description=f"Zapraszamy na {channel.mention}!", color=discord.Color(0xFFAA00))
     embed.set_image(url=CAYO_IMAGE_URL)
     embed.set_thumbnail(url=LOGO_URL) 
@@ -691,7 +702,7 @@ async def ping_cayo(interaction: discord.Interaction, role: discord.Role, channe
 # Lista wszystkich zapisanych
 @tree.command(name="list-all", description="Pokazuje listę wszystkich zapisanych")
 async def list_all(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
     
     if interaction.user.id not in ADMIN_ROLES:
         await interaction.followup.send("⛔ Brak uprawnień do użycia tej komendy!", ephemeral=True)
@@ -699,7 +710,7 @@ async def list_all(interaction: discord.Interaction):
         
     desc = ""
     for name, mid, data in get_all_active_enrollments():
-        desc += f"\n**{name} (msg {mid})**: {len(data.get('participants', []))} osób"
+        desc += f"\n**{name} (msg {mid})**: {len(data['participants'])} osób"
         
     for mid, data in squads.items():
         count = len(data.get('member_ids', []))
@@ -713,7 +724,7 @@ async def list_all(interaction: discord.Interaction):
 # Set status
 @tree.command(name="set-status", description="Zmienia status i aktywność bota (tylko admini)")
 async def set_status(interaction: discord.Interaction, status: str, opis_aktywnosci: str = None, typ_aktywnosci: str = None, url_stream: str = None):
-    await interaction.response.defer(ephemeral=True, thinking=True) 
+    await interaction.response.defer(ephemeral=True, thinking=True) # POPRAWKA: defer
 
     if interaction.user.id not in STATUS_ADMINS:
         await interaction.followup.send("⛔ Brak uprawnień!", ephemeral=True)
@@ -779,18 +790,16 @@ async def set_status(interaction: discord.Interaction, status: str, opis_aktywno
 
     await interaction.followup.send(response_msg, ephemeral=True)
 
-# Wypisz z capt (Nowa logika: Menu Wyboru)
+# Wypisz z capt
 class RemoveEnrollmentView(ui.View):
     def __init__(self, member_to_remove: discord.Member):
-        # POPRAWKA BŁĘDU: Usunięto 'custom_id' z super().__init__()
-        super().__init__(timeout=180) 
+        super().__init__(timeout=180, custom_id=f"remove_enrollment_view:{member_to_remove.id}")
         self.member_to_remove = member_to_remove
-        self.custom_id = f"remove_enrollment_view:{member_to_remove.id}" 
         self.add_item(EnrollmentSelectMenu("remove"))
 
     @ui.button(label="Potwierdź usunięcie", style=discord.ButtonStyle.red, custom_id="confirm_remove_button")
     async def confirm_remove(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.defer() 
+        await interaction.response.defer() # POPRAWKA: defer
         
         select_menu = next((item for item in self.children if isinstance(item, ui.Select)), None)
         if not select_menu or not select_menu.values:
@@ -851,7 +860,7 @@ class RemoveEnrollmentView(ui.View):
 
 @tree.command(name="wypisz-z-capt", description="Wypisuje użytkownika z dowolnego aktywnego zapisu (Captures, AirDrop, Event).")
 async def remove_from_enrollment(interaction: discord.Interaction, członek: discord.Member):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
     
     if interaction.user.id not in ADMIN_ROLES:
         await interaction.followup.send("⛔ Brak uprawnień do użycia tej komendy!", ephemeral=True)
@@ -868,18 +877,16 @@ async def remove_from_enrollment(interaction: discord.Interaction, członek: dis
         ephemeral=True
     )
 
-# Wpisz na capt (Nowa logika: Menu Wyboru)
+# Wpisz na capt
 class AddEnrollmentView(ui.View):
     def __init__(self, member_to_add: discord.Member):
-        # POPRAWKA BŁĘDU: Usunięto 'custom_id' z super().__init__()
-        super().__init__(timeout=180) 
+        super().__init__(timeout=180, custom_id=f"add_enrollment_view:{member_to_add.id}")
         self.member_to_add = member_to_add
-        self.custom_id = f"add_enrollment_view:{member_to_add.id}" 
         self.add_item(EnrollmentSelectMenu("add"))
 
     @ui.button(label="Potwierdź dodanie", style=discord.ButtonStyle.green, custom_id="confirm_add_button")
     async def confirm_add(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.defer() 
+        await interaction.response.defer() # POPRAWKA: defer
         
         select_menu = next((item for item in self.children if isinstance(item, ui.Select)), None)
         if not select_menu or not select_menu.values:
@@ -940,7 +947,7 @@ class AddEnrollmentView(ui.View):
 
 @tree.command(name="wpisz-na-capt", description="Wpisuje użytkownika na dowolny aktywny zapis (Captures, AirDrop, Event).")
 async def add_to_enrollment(interaction: discord.Interaction, członek: discord.Member):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
     
     if interaction.user.id not in ADMIN_ROLES:
         await interaction.followup.send("⛔ Brak uprawnień do użycia tej komendy!", ephemeral=True)
