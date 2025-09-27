@@ -35,40 +35,48 @@ ZANCUDO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/
 CAYO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414204332747915274/image.png"
 LOGO_URL = "https://cdn.discordapp.com/attachments/1184622314302754857/1420796249484824757/RInmPqb.webp?ex=68d6b31e&is=68d5619e&hm=0cdf3f7cbb269b12c9f47d7eb034e40a8d830ff502ca9ceacb3d7902d3819413&"
 
-# --- POPRAWKA: Funkcja do obsługi czasu (naprawia ValueError i AttributeError) ---
+# --- POPRAWKA STREFY CZASOWEJ (FIX 2 GODZIN) ---
+# Używamy stałego offsetu UTC+2, ponieważ użytkownik zgłosił błąd 2 godzin (CEST).
+# Jest to najprostsza metoda bez użycia zewnętrznych bibliotek jak pytz.
+POLAND_TZ = timezone(timedelta(hours=2))
+
+# --- POPRAWKA: Funkcja do obsługi czasu ---
 def create_timestamp(czas_str: str, data_str: str = None) -> int:
-    """Konwertuje HH:MM i opcjonalną datę DD.MM.RRRR lub DD.MM na Unix Timestamp (UTC)."""
+    """Konwertuje HH:MM i opcjonalną datę DD.MM.RRRR lub DD.MM na Unix Timestamp (UTC).
+       Traktuje dane wejściowe jako czas polski (UTC+2/CEST)."""
     
     match = re.match(r"(\d{1,2}):(\d{2})", czas_str)
     if not match:
         raise ValueError("Nieprawidłowy format czasu. Użyj HH:MM (np. 21:30).")
     hour, minute = map(int, match.groups())
 
-    # Używamy UTC do określenia 'teraz'
-    now_utc = discord.utils.utcnow() 
+    # Referencyjny czas w strefie polskiej (aktualny czas w PL)
+    # Używamy UTC (discord.utils.utcnow) i konwertujemy do POLAND_TZ.
+    now_pl = discord.utils.utcnow().astimezone(POLAND_TZ) 
     
-    # Ustawiamy czas na dzisiejszą datę w UTC
-    dt = now_utc.replace(hour=hour, minute=minute, second=0, microsecond=0, tzinfo=timezone.utc)
+    # Krok 1: Utwórz datę/czas w strefie polskiej na dziś
+    dt_local = now_pl.replace(hour=hour, minute=minute, second=0, microsecond=0)
     
     if data_str:
         try:
-            # Parsowanie daty DD.MM.RRRR (z ustawieniem na UTC)
-            dt_base = datetime.strptime(data_str, "%d.%m.%Y").replace(tzinfo=timezone.utc)
+            # Parsowanie daty DD.MM.RRRR
+            dt_base = datetime.strptime(data_str, "%d.%m.%Y").replace(tzinfo=POLAND_TZ)
         except ValueError:
             try:
-                # Parsowanie daty DD.MM (z ustawieniem bieżącego roku i UTC)
-                dt_base = datetime.strptime(data_str, "%d.%m").replace(year=now_utc.year, tzinfo=timezone.utc)
+                # Parsowanie daty DD.MM
+                dt_base = datetime.strptime(data_str, "%d.%m").replace(year=now_pl.year, tzinfo=POLAND_TZ)
             except ValueError:
                 raise ValueError("Nieprawidłowy format daty. Użyj DD.MM.RRRR lub DD.MM (np. 27.09.2025).")
         
-        # Wymień dzień, miesiąc i rok
-        final_dt = dt.replace(year=dt_base.year, month=dt_base.month, day=dt_base.day)
+        # Wymień dzień, miesiąc i rok, zachowując czas i strefę polską
+        # Dodatkowo, upewniamy się, że final_dt ma poprawny tzinfo
+        final_dt = dt_local.replace(year=dt_base.year, month=dt_base.month, day=dt_base.day, tzinfo=POLAND_TZ)
         
     else:
-        final_dt = dt # Czas już ustawiony na dzisiaj
+        final_dt = dt_local # Czas już ustawiony na dziś w strefie polskiej
 
-    # Jeśli czas (bez daty) minął, zakładamy, że chodzi o jutro
-    if final_dt < now_utc and not data_str:
+    # Jeśli czas (bez daty) minął w STREFIE POLSKIEJ, zakładamy, że chodzi o jutro
+    if final_dt < now_pl and not data_str:
         final_dt += timedelta(days=1)
     
     return int(final_dt.timestamp())
