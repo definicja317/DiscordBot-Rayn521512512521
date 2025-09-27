@@ -1,12 +1,12 @@
 import discord
 from discord import app_commands, ui
-from discord.ext import tasks # PRZYWRÓCONE: Import do obsługi zadań cyklicznych (timera Captures)
+from discord.ext import tasks
 import os
 import sys
 import threading
 from flask import Flask
 from dotenv import load_dotenv
-from datetime import datetime, timedelta, timezone # POPRAWKA: Dodano timezone do obsługi stref czasowych
+from datetime import datetime, timedelta, timezone # DODANO: timezone jest niezbędne do obsługi stref
 import re 
 import traceback 
 import time 
@@ -27,6 +27,7 @@ if not token:
 
 # --- Ustawienia ---
 # WAŻNE: Wprowadź swoje faktyczne ID ról/użytkowników.
+# PRZYKŁADOWE ID - ZASTĄP SWOIMI
 PICK_ROLE_ID = 1413424476770664499 
 STATUS_ADMINS = [1184620388425138183, 1409225386998501480, 1007732573063098378, 364869132526551050] 
 ADMIN_ROLES = STATUS_ADMINS 
@@ -35,11 +36,11 @@ ZANCUDO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/
 CAYO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/1414204332747915274/image.png"
 LOGO_URL = "https://cdn.discordapp.com/attachments/1184622314302754857/1420796249484824757/RInmPqb.webp?ex=68d6b31e&is=68d5619e&hm=0cdf3f7cbb269b12c9f47d7eb034e40a8d830ff502ca9ceacb3d7902d3819413&"
 
-# --- POPRAWKA STREFY CZASOWEJ (FIX 2 GODZIN) ---
+# --- POPRAWKA: Definicja strefy czasowej PL (UTC+2) ---
 # Używamy stałego offsetu UTC+2, ponieważ bot musi interpretować HH:MM jako czas polski (CEST/CET)
 POLAND_TZ = timezone(timedelta(hours=2))
 
-# --- POPRAWKA: Funkcja do obsługi czasu z uwzględnieniem strefy czasowej (PL: UTC+2) ---
+# --- POPRAWIONA FUNKCJA TIMERA (rozwiązuje błąd UTC i ValueError) ---
 def create_timestamp(czas_str: str, data_str: str = None) -> int:
     """Konwertuje HH:MM i opcjonalną datę DD.MM.RRRR lub DD.MM na Unix Timestamp (UTC).
        Traktuje dane wejściowe jako czas polski (UTC+2/CEST)."""
@@ -49,9 +50,8 @@ def create_timestamp(czas_str: str, data_str: str = None) -> int:
         raise ValueError("Nieprawidłowy format czasu. Użyj HH:MM (np. 21:30).")
     hour, minute = map(int, match.groups())
 
-    # Aktualny czas w strefie polskiej (UTC+2)
-    # Używamy discord.utils.utcnow() i konwertujemy do POLAND_TZ
-    now_pl = discord.utils.utcnow().astimezone(POLAND_TZ) 
+    # Aktualny czas w STREFIE POLSKIEJ (świadomy obiekt)
+    now_pl = discord.utils.utcnow().astimezone(POLAND_TZ)
     
     # 1. Tworzenie obiektu datetime na dziś w STREFIE POLSKIEJ (UTC+2)
     dt_local = now_pl.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -63,7 +63,7 @@ def create_timestamp(czas_str: str, data_str: str = None) -> int:
             dt_base_naive = datetime.strptime(data_str, "%d.%m.%Y")
         except ValueError:
             try:
-                # Parsowanie daty DD.MM -> tworzy naive datetime
+                # Parsowanie daty DD.MM -> tworzy naive datetime, uzupełniając rok
                 dt_base_naive = datetime.strptime(data_str, "%d.%m").replace(year=now_pl.year)
             except ValueError:
                 raise ValueError("Nieprawidłowy format daty. Użyj DD.MM.RRRR lub DD.MM (np. 27.09.2025).")
@@ -82,7 +82,7 @@ def create_timestamp(czas_str: str, data_str: str = None) -> int:
     if final_dt < now_pl and not data_str:
         final_dt += timedelta(days=1)
     
-    # 4. Konwersja na Unix Timestamp (MUSI BYĆ W UTC, aby Discord poprawnie wyświetlił czas)
+    # 4. Konwersja na Unix Timestamp (MUSI BYĆ W UTC)
     final_dt_utc = final_dt.astimezone(timezone.utc) 
     return int(final_dt_utc.timestamp())
 # --- KONIEC POPRAWIONEJ FUNKCJI TIMERA ---
@@ -95,13 +95,12 @@ client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
 
-# --- POPRAWKA: Globalna obsługa błędów (naprawia AttributeError i loguje 10062/ValueError) ---
+# --- POPRAWKA: Globalna obsługa błędów (rozwiązuje 10062/ValueError i upewnia się co do AppCommandError) ---
 @tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     print(f"Globalny błąd komendy {interaction.command.name} (użytkownik: {interaction.user.display_name}):")
     traceback.print_exc() 
     
-    # POPRAWKA: Używamy poprawnej klasy: app_commands.CommandInvokeError
     if isinstance(error, app_commands.CommandInvokeError): 
         # Obsługa błędu ValueError z funkcji create_timestamp
         if isinstance(error.original, ValueError):
@@ -161,7 +160,6 @@ class EnrollmentSelectMenu(ui.Select):
                     value=f"{name.lower()}-{msg_id}"
                 )
             )
-        # custom_id jest atrybutem UI Elementu, nie konstruktora Select
         super().__init__(
             placeholder=f"Wybierz zapis:",
             max_values=1,
@@ -177,6 +175,7 @@ class EnrollmentSelectMenu(ui.Select):
 #       AIRDROP & CAPTURES VIEWS
 # =====================
 class AirdropView(ui.View):
+    # POPRAWKA: Usunięcie custom_id z super().__init__()
     def __init__(self, message_id: int, description: str, voice_channel: discord.VoiceChannel, author_name: str, timestamp: int = None):
         super().__init__(timeout=None) 
         self.message_id = message_id
@@ -185,18 +184,17 @@ class AirdropView(ui.View):
         self.participants: list[int] = [] 
         self.author_name = author_name
         self.timestamp = timestamp 
-        self.custom_id = f"airdrop_view:{message_id}" 
+        self.custom_id = f"airdrop_view:{message_id}" # Pozostawiamy jako atrybut instancji
 
     def make_embed(self, guild: discord.Guild):
         embed = discord.Embed(title="🎁 AirDrop!", description=self.description, color=discord.Color(0xFFFFFF))
         embed.set_thumbnail(url=LOGO_URL)
         embed.add_field(name="Kanał głosowy:", value=f"🔊 {self.voice_channel.mention}", inline=False)
         
-        # POPRAWKA TIMERU AIRDROP (ZGODNIE Z ŻĄDANIEM UŻYTKOWNIKA)
+        # POPRAWKA TIMERU AIRDROP (ZGODNIE Z ŻĄDANIEM UŻYTKOWNIKA - bez emoji, tylko czas i odliczanie)
         if self.timestamp:
             # Używamy formatu t (<t:timestamp:t>) dla samej godziny, i R (<t:timestamp:R>) dla odliczania
             time_str = f"Rozpoczęcie AirDrop o <t:{self.timestamp}:t> (<t:{self.timestamp}:R>)"
-            # Zmieniono nazwę pola na "Czas rozpoczęcia:", aby pasowało do treści
             embed.add_field(name="Czas rozpoczęcia:", value=time_str, inline=False)
             
         if self.participants:
@@ -226,7 +224,7 @@ class AirdropView(ui.View):
              return
              
         self.participants.append(interaction.user.id)
-         Bairdrops[self.message_id]["participants"].append(interaction.user.id)
+        airdrops[self.message_id]["participants"].append(interaction.user.id) # POPRAWKA: Upewnienie się, że `airdrops` jest poprawnie zapisane
         
         await interaction.message.edit(embed=self.make_embed(interaction.guild), view=self)
         await interaction.followup.send("✅ Dołączyłeś(aś)!", ephemeral=True)
@@ -271,6 +269,7 @@ class PlayerSelectMenu(ui.Select):
         await interaction.response.defer() 
 
 class PickPlayersView(ui.View):
+    # POPRAWKA: Usunięcie custom_id z super().__init__()
     def __init__(self, capture_id: int):
         super().__init__(timeout=180)
         self.capture_id = capture_id
@@ -312,7 +311,7 @@ class PickPlayersView(ui.View):
         await interaction.followup.send(embed=final_embed)
 
 class CapturesView(ui.View):
-    # PRZYWRÓCONO: Flaga 'started' jest niezbędna do prawidłowego działania timera Captures
+    # POPRAWKA: Usunięcie custom_id z super().__init__()
     def __init__(self, capture_id: int, author_name: str, image_url: str = None, timestamp: int = None, started: bool = False): 
         super().__init__(timeout=None)
         self.capture_id = capture_id
@@ -320,7 +319,7 @@ class CapturesView(ui.View):
         self.image_url = image_url
         self.timestamp = timestamp 
         self.custom_id = f"captures_view:{capture_id}"
-        self.started = started # PRZYWRÓCONO: Flaga stanu
+        self.started = started 
         
     def make_embed(self, guild: discord.Guild):
         participants_ids = captures.get(self.capture_id, {}).get("participants", [])
@@ -331,13 +330,12 @@ class CapturesView(ui.View):
         if self.image_url:
             embed.set_image(url=self.image_url)
 
-        # PRZYWRÓCONO: Poprawiony format wyświetlania timera Captures
         if self.timestamp:
             if self.started:
                 # Stan PO rozpoczęciu
                 time_str = "**CAPT rozpoczął się**" 
             else:
-                # Stan PRZED rozpoczęciem (używa formatu t - sama godzina, oraz formatu R - odliczanie)
+                # Stan PRZED rozpoczęciem
                 time_str = f"Rozpoczęcie CAPT o <t:{self.timestamp}:t> (<t:{self.timestamp}:R>)" 
             
             embed.add_field(name="Czas rozpoczęcia:", value=time_str, inline=False)
@@ -366,7 +364,6 @@ class CapturesView(ui.View):
             await interaction.response.defer() 
             
             if self.capture_id not in captures:
-                 # PRZYWRÓCONO: Pełniejsze zapisywanie danych, w tym "started"
                  captures[self.capture_id] = {"participants": [], "author_name": self.author_name, "image_url": self.image_url, "timestamp": self.timestamp, "started": self.started} 
                  
             captures[self.capture_id]["participants"].append(user_id)
@@ -456,6 +453,7 @@ def create_squad_embed(guild: discord.Guild, author_name: str, member_ids: list[
 
 
 class EditSquadView(ui.View):
+    # POPRAWKA: Usunięcie custom_id z super().__init__()
     def __init__(self, message_id: int):
         super().__init__(timeout=180)
         self.message_id = message_id
@@ -507,6 +505,7 @@ class EditSquadView(ui.View):
 
 
 class SquadView(ui.View):
+    # POPRAWKA: Usunięcie custom_id z super().__init__()
     def __init__(self, message_id: int, role_id: int):
         super().__init__(timeout=None)
         self.message_id = message_id
@@ -543,7 +542,7 @@ class SquadView(ui.View):
 #       FUNKCJONALNOŚĆ TIMERA CAPTURES
 # =====================
 
-@tasks.loop(minutes=1.0) # PRZYWRÓCONE: Cykliczne zadanie
+@tasks.loop(minutes=1.0) 
 async def check_captures_end_time():
     """Sprawdza co minutę, czy czas rozpoczęcia Captures minął."""
     now_utc = discord.utils.utcnow().timestamp()
@@ -615,7 +614,6 @@ async def on_ready():
                  channel = client.get_channel(data["channel_id"])
                  if channel:
                      data["message"] = await channel.fetch_message(msg_id)
-                     # PRZYWRÓCONO: Przekazanie image_url, timestamp i started
                      image_url = data.get("image_url")
                      timestamp = data.get("timestamp")
                      started = data.get("started", False)
@@ -634,7 +632,6 @@ async def on_ready():
                      voice_channel = client.get_channel(data["voice_channel_id"])
                      
                      if voice_channel:
-                         # PRZYWRÓCONO: Przekazanie timestamp
                          timestamp = data.get("timestamp")
                          view = AirdropView(msg_id, data["description"], voice_channel, data["author_name"], timestamp)
                          view.participants = data.get("participants", []) 
@@ -651,7 +648,7 @@ async def on_ready():
 # Komenda SQUAD
 @tree.command(name="create-squad", description="Tworzy ogłoszenie o składzie z możliwością edycji.")
 async def create_squad(interaction: discord.Interaction, rola: discord.Role, tytul: str = "Main Squad"):
-    await interaction.response.defer(ephemeral=True) 
+    await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
 
     if interaction.user.id not in ADMIN_ROLES:
         await interaction.followup.send("⛔ Brak uprawnień!", ephemeral=True)
@@ -662,7 +659,6 @@ async def create_squad(interaction: discord.Interaction, rola: discord.Role, tyt
     
     initial_member_ids = []
     embed = create_squad_embed(interaction.guild, author_name, initial_member_ids, tytul) 
-    # Ustawienie message_id na 0, zostanie nadane po wysłaniu
     view = SquadView(0, role_id) 
     
     content = f"{rola.mention}"
@@ -686,21 +682,18 @@ async def create_squad(interaction: discord.Interaction, rola: discord.Role, tyt
 # Komenda CAPTURES (Z TIMMEREM)
 @tree.command(name="create-capt", description="Tworzy ogłoszenie o captures z opcjonalnym timerem i zdjęciem.")
 async def create_capt(interaction: discord.Interaction, czas_zakonczenia: str, data_zakonczenia: str = None, link_do_zdjecia: str = None):
-    await interaction.response.defer(ephemeral=True) 
+    await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
     
-    # POPRAWKA: Wywołanie funkcji create_timestamp (z uwzględnieniem strefy PL)
     try:
         timestamp = create_timestamp(czas_zakonczenia, data_zakonczenia)
     except ValueError as e:
         await interaction.followup.send(f"❌ Błąd formatu czasu/daty: **{e}**", ephemeral=True)
         return
     
-    # PRZYWRÓCONO: Sprawdzenie, czy czas już minął
     started = discord.utils.utcnow().timestamp() >= timestamp
     
     author_name = interaction.user.display_name
     
-    # PRZYWRÓCONO: Przekazanie image_url, timestamp i started
     view = CapturesView(0, author_name, link_do_zdjecia, timestamp, started) 
     embed = view.make_embed(interaction.guild)
     
@@ -713,7 +706,7 @@ async def create_capt(interaction: discord.Interaction, czas_zakonczenia: str, d
         "author_name": author_name,
         "image_url": link_do_zdjecia, 
         "timestamp": timestamp,
-        "started": started # PRZYWRÓCONO: Zapisanie stanu
+        "started": started 
     }
     
     view.capture_id = sent.id 
@@ -725,16 +718,14 @@ async def create_capt(interaction: discord.Interaction, czas_zakonczenia: str, d
 # Komenda AirDrop (Z TIMMEREM)
 @tree.command(name="airdrop", description="Tworzy ogłoszenie o AirDropie z timerem.")
 async def airdrop_command(interaction: discord.Interaction, channel: discord.TextChannel, voice: discord.VoiceChannel, role: discord.Role, opis: str, czas_zakonczenia: str, data_zakonczenia: str = None):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
     
-    # POPRAWKA: Wywołanie funkcji create_timestamp (z uwzględnieniem strefy PL)
     try:
         timestamp = create_timestamp(czas_zakonczenia, data_zakonczenia)
     except ValueError as e:
         await interaction.followup.send(f"❌ Błąd formatu czasu/daty: **{e}**", ephemeral=True)
         return
         
-    # POPRAWKA: Przekazanie timestamp do widoku
     view = AirdropView(0, opis, voice, interaction.user.display_name, timestamp) 
     embed = view.make_embed(interaction.guild)
     sent = await channel.send(content=f"{role.mention}", embed=embed, view=view)
@@ -758,7 +749,7 @@ async def airdrop_command(interaction: discord.Interaction, channel: discord.Tex
 # Eventy Zancudo / Cayo
 @tree.command(name="ping-zancudo", description="Wysyła ogłoszenie o ataku na Fort Zancudo.")
 async def ping_zancudo(interaction: discord.Interaction, role: discord.Role, channel: discord.VoiceChannel):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
     embed = discord.Embed(title="Atak na FORT ZANCUDO!", description=f"Zapraszamy na {channel.mention}!", color=discord.Color(0xFF0000))
     embed.set_image(url=ZANCUDO_IMAGE_URL)
     embed.set_thumbnail(url=LOGO_URL) 
@@ -768,7 +759,7 @@ async def ping_zancudo(interaction: discord.Interaction, role: discord.Role, cha
 
 @tree.command(name="ping-cayo", description="Wysyła ogłoszenie o ataku na Cayo Perico.")
 async def ping_cayo(interaction: discord.Interaction, role: discord.Role, channel: discord.VoiceChannel):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
     embed = discord.Embed(title="Atak na CAYO PERICO!", description=f"Zapraszamy na {channel.mention}!", color=discord.Color(0xFFAA00))
     embed.set_image(url=CAYO_IMAGE_URL)
     embed.set_thumbnail(url=LOGO_URL) 
@@ -779,7 +770,7 @@ async def ping_cayo(interaction: discord.Interaction, role: discord.Role, channe
 # Lista wszystkich zapisanych
 @tree.command(name="list-all", description="Pokazuje listę wszystkich zapisanych")
 async def list_all(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
     
     if interaction.user.id not in ADMIN_ROLES:
         await interaction.followup.send("⛔ Brak uprawnień do użycia tej komendy!", ephemeral=True)
@@ -802,7 +793,7 @@ async def list_all(interaction: discord.Interaction):
 # Set status
 @tree.command(name="set-status", description="Zmienia status i aktywność bota (tylko admini)")
 async def set_status(interaction: discord.Interaction, status: str, opis_aktywnosci: str = None, typ_aktywnosci: str = None, url_stream: str = None):
-    await interaction.response.defer(ephemeral=True, thinking=True) 
+    await interaction.response.defer(ephemeral=True, thinking=True) # POPRAWKA: defer
 
     if interaction.user.id not in STATUS_ADMINS:
         await interaction.followup.send("⛔ Brak uprawnień!", ephemeral=True)
@@ -870,6 +861,7 @@ async def set_status(interaction: discord.Interaction, status: str, opis_aktywno
 
 # Wypisz z capt
 class RemoveEnrollmentView(ui.View):
+    # POPRAWKA: Usunięcie custom_id z super().__init__()
     def __init__(self, member_to_remove: discord.Member):
         super().__init__(timeout=180)
         self.member_to_remove = member_to_remove
@@ -940,7 +932,7 @@ class RemoveEnrollmentView(ui.View):
 
 @tree.command(name="wypisz-z-capt", description="Wypisuje użytkownika z dowolnego aktywnego zapisu (Captures, AirDrop, Event).")
 async def remove_from_enrollment(interaction: discord.Interaction, członek: discord.Member):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
     
     if interaction.user.id not in ADMIN_ROLES:
         await interaction.followup.send("⛔ Brak uprawnień do użycia tej komendy!", ephemeral=True)
@@ -959,6 +951,7 @@ async def remove_from_enrollment(interaction: discord.Interaction, członek: dis
 
 # Wpisz na capt
 class AddEnrollmentView(ui.View):
+    # POPRAWKA: Usunięcie custom_id z super().__init__()
     def __init__(self, member_to_add: discord.Member):
         super().__init__(timeout=180)
         self.member_to_add = member_to_add
@@ -1029,7 +1022,7 @@ class AddEnrollmentView(ui.View):
 
 @tree.command(name="wpisz-na-capt", description="Wpisuje użytkownika na dowolny aktywny zapis (Captures, AirDrop, Event).")
 async def add_to_enrollment(interaction: discord.Interaction, członek: discord.Member):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True) # POPRAWKA: defer
     
     if interaction.user.id not in ADMIN_ROLES:
         await interaction.followup.send("⛔ Brak uprawnień do użycia tej komendy!", ephemeral=True)
@@ -1058,5 +1051,5 @@ threading.Thread(target=run_discord_bot).start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    # Użycie `debug=False` jest zalecane, zwłaszcza przy użyciu bota w wątku.
+    # Użycie `debug=False` jest zalecane.
     app.run(host="0.0.0.0", port=port, debug=False)
