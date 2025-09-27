@@ -146,7 +146,7 @@ def get_all_active_enrollments():
     return all_enrollments
 
 class EnrollmentSelectMenu(ui.Select):
-    # POPRAWKA: Usunięcie custom_id z super().__init__ i przeniesienie go
+    # POPRAWKA: custom_id jest atrybutem instancji, a nie argumentem super().__init__ dla ui.Select
     def __init__(self, action: str):
         self.action = action 
         enrollments = get_all_active_enrollments()
@@ -270,13 +270,13 @@ class PickPlayersView(ui.View):
     def __init__(self, capture_id: int):
         super().__init__(timeout=180) 
         self.capture_id = capture_id
-        self.custom_id = f"pick_players_view:{capture_id}"
+        # self.custom_id = f"pick_players_view:{capture_id}" # Usuwamy, bo nie jest potrzebne dla view z timeoutem
 
     @ui.button(label="Potwierdź wybór", style=discord.ButtonStyle.green, custom_id="confirm_pick_button")
     async def confirm_pick(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
         
-        select_menu = next((item for item in self.children if isinstance(item, ui.Select)), None)
+        select_menu = next((item for item in self.children if item.custom_id == f"player_select:{self.capture_id}"), None)
         
         if not select_menu:
              await interaction.followup.send("Błąd: Nie znaleziono menu wyboru. Spróbuj ponownie.", ephemeral=True)
@@ -447,10 +447,11 @@ def create_squad_embed(guild: discord.Guild, author_name: str, member_ids: list[
 
 
 class EditSquadView(ui.View):
+    # POPRAWKA: Usunięcie custom_id z super().__init__ (rozwiązuje TypeError)
     def __init__(self, message_id: int):
         super().__init__(timeout=180)
         self.message_id = message_id
-        self.custom_id = f"edit_squad_view:{message_id}"
+        # self.custom_id = f"edit_squad_view:{message_id}" # Usuwamy, bo nie jest potrzebne dla view z timeoutem
         
         self.add_item(ui.UserSelect(
             placeholder="Wybierz członków składu (max 25)",
