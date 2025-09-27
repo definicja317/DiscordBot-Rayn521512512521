@@ -1,6 +1,6 @@
 import discord
 from discord import app_commands, ui
-from discord.ext import tasks
+from discord.ext import tasks # PRZYWRÓCONE: Import do obsługi zadań cyklicznych (timera Captures)
 import os
 import sys
 import threading
@@ -50,6 +50,7 @@ def create_timestamp(czas_str: str, data_str: str = None) -> int:
     hour, minute = map(int, match.groups())
 
     # Aktualny czas w strefie polskiej (UTC+2)
+    # Używamy discord.utils.utcnow() i konwertujemy do POLAND_TZ
     now_pl = discord.utils.utcnow().astimezone(POLAND_TZ) 
     
     # 1. Tworzenie obiektu datetime na dziś w STREFIE POLSKIEJ (UTC+2)
@@ -177,7 +178,6 @@ class EnrollmentSelectMenu(ui.Select):
 # =====================
 class AirdropView(ui.View):
     def __init__(self, message_id: int, description: str, voice_channel: discord.VoiceChannel, author_name: str, timestamp: int = None):
-        # POPRAWKA: Usunięcie custom_id z super().__init__()
         super().__init__(timeout=None) 
         self.message_id = message_id
         self.description = description
@@ -192,9 +192,12 @@ class AirdropView(ui.View):
         embed.set_thumbnail(url=LOGO_URL)
         embed.add_field(name="Kanał głosowy:", value=f"🔊 {self.voice_channel.mention}", inline=False)
         
+        # POPRAWKA TIMERU AIRDROP (ZGODNIE Z ŻĄDANIEM UŻYTKOWNIKA)
         if self.timestamp:
-            time_str = f"⌛ **Odliczanie:** <t:{self.timestamp}:F> (Kończy się <t:{self.timestamp}:R>)"
-            embed.add_field(name="Zakończenie AirDropa:", value=time_str, inline=False)
+            # Używamy formatu t (<t:timestamp:t>) dla samej godziny, i R (<t:timestamp:R>) dla odliczania
+            time_str = f"Rozpoczęcie AirDrop o <t:{self.timestamp}:t> (<t:{self.timestamp}:R>)"
+            # Zmieniono nazwę pola na "Czas rozpoczęcia:", aby pasowało do treści
+            embed.add_field(name="Czas rozpoczęcia:", value=time_str, inline=False)
             
         if self.participants:
             lines = []
@@ -223,7 +226,7 @@ class AirdropView(ui.View):
              return
              
         self.participants.append(interaction.user.id)
-        airdrops[self.message_id]["participants"].append(interaction.user.id)
+         Bairdrops[self.message_id]["participants"].append(interaction.user.id)
         
         await interaction.message.edit(embed=self.make_embed(interaction.guild), view=self)
         await interaction.followup.send("✅ Dołączyłeś(aś)!", ephemeral=True)
@@ -269,7 +272,6 @@ class PlayerSelectMenu(ui.Select):
 
 class PickPlayersView(ui.View):
     def __init__(self, capture_id: int):
-        # POPRAWKA: Usunięcie custom_id z super().__init__()
         super().__init__(timeout=180)
         self.capture_id = capture_id
         self.custom_id = f"pick_players_view:{capture_id}"
@@ -310,16 +312,16 @@ class PickPlayersView(ui.View):
         await interaction.followup.send(embed=final_embed)
 
 class CapturesView(ui.View):
+    # PRZYWRÓCONO: Flaga 'started' jest niezbędna do prawidłowego działania timera Captures
     def __init__(self, capture_id: int, author_name: str, image_url: str = None, timestamp: int = None, started: bool = False): 
-        # POPRAWKA: Usunięcie custom_id z super().__init__()
         super().__init__(timeout=None)
         self.capture_id = capture_id
         self.author_name = author_name
         self.image_url = image_url
         self.timestamp = timestamp 
         self.custom_id = f"captures_view:{capture_id}"
-        self.started = started # Flaga informująca, czy captures się rozpoczął
-
+        self.started = started # PRZYWRÓCONO: Flaga stanu
+        
     def make_embed(self, guild: discord.Guild):
         participants_ids = captures.get(self.capture_id, {}).get("participants", [])
         
@@ -329,17 +331,15 @@ class CapturesView(ui.View):
         if self.image_url:
             embed.set_image(url=self.image_url)
 
-        # NAPRAWA TIMERU ZGODNIE Z ŻĄDANIEM UŻYTKOWNIKA (bez emoji, bez dat)
+        # PRZYWRÓCONO: Poprawiony format wyświetlania timera Captures
         if self.timestamp:
             if self.started:
                 # Stan PO rozpoczęciu
                 time_str = "**CAPT rozpoczął się**" 
             else:
                 # Stan PRZED rozpoczęciem (używa formatu t - sama godzina, oraz formatu R - odliczanie)
-                # Używamy formatu t (<t:timestamp:t>) dla samej godziny, i R (<t:timestamp:R>) dla odliczania
                 time_str = f"Rozpoczęcie CAPT o <t:{self.timestamp}:t> (<t:{self.timestamp}:R>)" 
             
-            # Wg życzenia, nie dodajemy tu emoji
             embed.add_field(name="Czas rozpoczęcia:", value=time_str, inline=False)
         
         if participants_ids:
@@ -366,6 +366,7 @@ class CapturesView(ui.View):
             await interaction.response.defer() 
             
             if self.capture_id not in captures:
+                 # PRZYWRÓCONO: Pełniejsze zapisywanie danych, w tym "started"
                  captures[self.capture_id] = {"participants": [], "author_name": self.author_name, "image_url": self.image_url, "timestamp": self.timestamp, "started": self.started} 
                  
             captures[self.capture_id]["participants"].append(user_id)
@@ -456,8 +457,7 @@ def create_squad_embed(guild: discord.Guild, author_name: str, member_ids: list[
 
 class EditSquadView(ui.View):
     def __init__(self, message_id: int):
-        # POPRAWKA: Usunięcie custom_id z super().__init__()
-        super().__init__(timeout=180) 
+        super().__init__(timeout=180)
         self.message_id = message_id
         self.custom_id = f"edit_squad_view:{message_id}"
         
@@ -508,7 +508,6 @@ class EditSquadView(ui.View):
 
 class SquadView(ui.View):
     def __init__(self, message_id: int, role_id: int):
-        # POPRAWKA: Usunięcie custom_id z super().__init__()
         super().__init__(timeout=None)
         self.message_id = message_id
         self.role_id = role_id
@@ -544,7 +543,7 @@ class SquadView(ui.View):
 #       FUNKCJONALNOŚĆ TIMERA CAPTURES
 # =====================
 
-@tasks.loop(minutes=1.0)
+@tasks.loop(minutes=1.0) # PRZYWRÓCONE: Cykliczne zadanie
 async def check_captures_end_time():
     """Sprawdza co minutę, czy czas rozpoczęcia Captures minął."""
     now_utc = discord.utils.utcnow().timestamp()
@@ -616,7 +615,7 @@ async def on_ready():
                  channel = client.get_channel(data["channel_id"])
                  if channel:
                      data["message"] = await channel.fetch_message(msg_id)
-                     # POPRAWKA: Przekazanie image_url, timestamp i started
+                     # PRZYWRÓCONO: Przekazanie image_url, timestamp i started
                      image_url = data.get("image_url")
                      timestamp = data.get("timestamp")
                      started = data.get("started", False)
@@ -635,7 +634,7 @@ async def on_ready():
                      voice_channel = client.get_channel(data["voice_channel_id"])
                      
                      if voice_channel:
-                         # POPRAWKA: Przekazanie timestamp
+                         # PRZYWRÓCONO: Przekazanie timestamp
                          timestamp = data.get("timestamp")
                          view = AirdropView(msg_id, data["description"], voice_channel, data["author_name"], timestamp)
                          view.participants = data.get("participants", []) 
@@ -696,12 +695,12 @@ async def create_capt(interaction: discord.Interaction, czas_zakonczenia: str, d
         await interaction.followup.send(f"❌ Błąd formatu czasu/daty: **{e}**", ephemeral=True)
         return
     
-    # Sprawdzenie, czy czas już minął
+    # PRZYWRÓCONO: Sprawdzenie, czy czas już minął
     started = discord.utils.utcnow().timestamp() >= timestamp
     
     author_name = interaction.user.display_name
     
-    # POPRAWKA: Przekazanie image_url, timestamp i started
+    # PRZYWRÓCONO: Przekazanie image_url, timestamp i started
     view = CapturesView(0, author_name, link_do_zdjecia, timestamp, started) 
     embed = view.make_embed(interaction.guild)
     
@@ -714,7 +713,7 @@ async def create_capt(interaction: discord.Interaction, czas_zakonczenia: str, d
         "author_name": author_name,
         "image_url": link_do_zdjecia, 
         "timestamp": timestamp,
-        "started": started # Zapisanie stanu
+        "started": started # PRZYWRÓCONO: Zapisanie stanu
     }
     
     view.capture_id = sent.id 
@@ -872,7 +871,6 @@ async def set_status(interaction: discord.Interaction, status: str, opis_aktywno
 # Wypisz z capt
 class RemoveEnrollmentView(ui.View):
     def __init__(self, member_to_remove: discord.Member):
-        # POPRAWKA: Usunięcie custom_id z super().__init__()
         super().__init__(timeout=180)
         self.member_to_remove = member_to_remove
         self.custom_id = f"remove_enrollment_view:{member_to_remove.id}"
@@ -962,7 +960,6 @@ async def remove_from_enrollment(interaction: discord.Interaction, członek: dis
 # Wpisz na capt
 class AddEnrollmentView(ui.View):
     def __init__(self, member_to_add: discord.Member):
-        # POPRAWKA: Usunięcie custom_id z super().__init__()
         super().__init__(timeout=180)
         self.member_to_add = member_to_add
         self.custom_id = f"add_enrollment_view:{member_to_add.id}"
