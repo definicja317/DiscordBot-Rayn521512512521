@@ -965,13 +965,21 @@ class RemoveEnrollmentView(ui.View):
             data_dict = events[type_str].get(msg_id)
 
         if not data_dict:
-            await interaction.followup.edit_message(content="❌ Błąd: Nie znaleziono aktywnego zapisu o tym ID.", view=None)
+            await interaction.followup.edit_message(
+                interaction.message.id,
+                content="❌ Błąd: Nie znaleziono aktywnego zapisu o tym ID.",
+                view=None
+            )
             return
 
         participants = data_dict.get("participants", [])
         
         if user_id not in participants:
-            await interaction.followup.edit_message(content=f"⚠️ **{self.member_to_remove.display_name}** nie jest zapisany(a) na ten **{type_str.capitalize()}**.", view=None)
+            await interaction.followup.edit_message(
+                interaction.message.id,
+                content=f"⚠️ **{self.member_to_remove.display_name}** nie jest zapisany(a) na ten **{type_str.capitalize()}**.",
+                view=None
+            )
             return
 
         participants.remove(user_id)
@@ -1001,29 +1009,10 @@ class RemoveEnrollmentView(ui.View):
                  events[type_str][msg_id]["participants"] = participants
 
         await interaction.followup.edit_message(
-            content=f"✅ Pomyślnie wypisano **{self.member_to_remove.display_name}** z **{type_str.capitalize()}** (ID: `{msg_id}`).", 
+            interaction.message.id,
+            content=f"✅ Pomyślnie wypisano **{self.member_to_remove.display_name}** z **{type_str.capitalize()}** (ID: `{msg_id}`).",
             view=None
         )
-
-@tree.command(name="wypisz-z-capt", description="Wypisuje użytkownika z dowolnego aktywnego zapisu (Captures, AirDrop, Event).")
-async def remove_from_enrollment(interaction: discord.Interaction, członek: discord.Member):
-    await interaction.response.defer(ephemeral=True) 
-    
-    guild_member = interaction.guild.get_member(interaction.user.id)
-    if BOT_ADMIN_ROLE_ID not in [r.id for r in guild_member.roles] and interaction.user.id not in STATUS_ADMINS:
-        await interaction.followup.send("⛔ Brak uprawnień do użycia tej komendy!", ephemeral=True)
-        return
-        
-    enrollments = get_all_active_enrollments()
-    if not enrollments:
-        await interaction.followup.send("⚠️ Brak aktywnych zapisów, z których można wypisać użytkownika.", ephemeral=True)
-        return
-        
-    await interaction.followup.send(
-        f"Wybierz zapis, z którego usunąć **{członek.display_name}**:", 
-        view=RemoveEnrollmentView(członek), 
-        ephemeral=True
-    )
 
 # Wpisz na capt
 class AddEnrollmentView(ui.View):
@@ -1055,13 +1044,21 @@ class AddEnrollmentView(ui.View):
             data_dict = events[type_str].get(msg_id)
 
         if not data_dict:
-            await interaction.followup.edit_message(content="❌ Błąd: Nie znaleziono aktywnego zapisu o tym ID.", view=None)
+            await interaction.followup.edit_message(
+                interaction.message.id,
+                content="❌ Błąd: Nie znaleziono aktywnego zapisu o tym ID.",
+                view=None
+            )
             return
 
         participants = data_dict.get("participants", [])
         
         if user_id in participants:
-            await interaction.followup.edit_message(content=f"⚠️ **{self.member_to_add.display_name}** jest już zapisany(a) na ten **{type_str.capitalize()}**.", view=None)
+            await interaction.followup.edit_message(
+                interaction.message.id,
+                content=f"⚠️ **{self.member_to_add.display_name}** jest już zapisany(a) na ten **{type_str.capitalize()}**.",
+                view=None
+            )
             return
 
         participants.append(user_id)
@@ -1091,7 +1088,8 @@ class AddEnrollmentView(ui.View):
                  events[type_str][msg_id]["participants"] = participants
 
         await interaction.followup.edit_message(
-            content=f"✅ Pomyślnie wpisano **{self.member_to_add.display_name}** na **{type_str.capitalize()}** (ID: `{msg_id}`).", 
+            interaction.message.id,
+            content=f"✅ Pomyślnie wpisano **{self.member_to_add.display_name}** na **{type_str.capitalize()}** (ID: `{msg_id}`).",
             view=None
         )
 
