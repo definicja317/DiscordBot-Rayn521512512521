@@ -36,11 +36,10 @@ CAYO_IMAGE_URL = "https://cdn.discordapp.com/attachments/1224129510535069766/141
 LOGO_URL = "https://cdn.discordapp.com/attachments/1184622314302754857/1420796249484824757/RInmPqb.webp?ex=68d6b31e&is=68d5619e&hm=0cdf3f7cbb269b12c9f47d7eb034e40a8d830ff502ca9ceacb3d7902d3819413&"
 
 # --- POPRAWKA STREFY CZASOWEJ (FIX 2 GODZIN) ---
-# Używamy stałego offsetu UTC+2, ponieważ użytkownik zgłosił błąd 2 godzin (CEST).
-# Jest to najprostsza metoda bez użycia zewnętrznych bibliotek jak pytz.
+# Używamy stałego offsetu UTC+2, ponieważ bot musi interpretować HH:MM jako czas polski (CEST/CET)
 POLAND_TZ = timezone(timedelta(hours=2))
 
-# --- POPRAWKA: Funkcja do obsługi czasu ---
+# --- POPRAWKA: Funkcja do obsługi czasu z uwzględnieniem strefy czasowej (PL: UTC+2) ---
 def create_timestamp(czas_str: str, data_str: str = None) -> int:
     """Konwertuje HH:MM i opcjonalną datę DD.MM.RRRR lub DD.MM na Unix Timestamp (UTC).
        Traktuje dane wejściowe jako czas polski (UTC+2/CEST)."""
@@ -50,37 +49,42 @@ def create_timestamp(czas_str: str, data_str: str = None) -> int:
         raise ValueError("Nieprawidłowy format czasu. Użyj HH:MM (np. 21:30).")
     hour, minute = map(int, match.groups())
 
-    # Referencyjny czas w strefie polskiej (aktualny czas w PL)
-    # Używamy UTC (discord.utils.utcnow) i konwertujemy do POLAND_TZ.
+    # Aktualny czas w strefie polskiej (UTC+2)
     now_pl = discord.utils.utcnow().astimezone(POLAND_TZ) 
     
-    # Krok 1: Utwórz datę/czas w strefie polskiej na dziś
+    # 1. Tworzenie obiektu datetime na dziś w STREFIE POLSKIEJ (UTC+2)
     dt_local = now_pl.replace(hour=hour, minute=minute, second=0, microsecond=0)
     
+    # 2. Obsługa opcjonalnej daty
     if data_str:
         try:
-            # Parsowanie daty DD.MM.RRRR
-            dt_base = datetime.strptime(data_str, "%d.%m.%Y").replace(tzinfo=POLAND_TZ)
+            # Parsowanie daty DD.MM.RRRR -> tworzy naive datetime
+            dt_base_naive = datetime.strptime(data_str, "%d.%m.%Y")
         except ValueError:
             try:
-                # Parsowanie daty DD.MM
-                dt_base = datetime.strptime(data_str, "%d.%m").replace(year=now_pl.year, tzinfo=POLAND_TZ)
+                # Parsowanie daty DD.MM -> tworzy naive datetime
+                dt_base_naive = datetime.strptime(data_str, "%d.%m").replace(year=now_pl.year)
             except ValueError:
                 raise ValueError("Nieprawidłowy format daty. Użyj DD.MM.RRRR lub DD.MM (np. 27.09.2025).")
         
-        # Wymień dzień, miesiąc i rok, zachowując czas i strefę polską
-        # Dodatkowo, upewniamy się, że final_dt ma poprawny tzinfo
-        final_dt = dt_local.replace(year=dt_base.year, month=dt_base.month, day=dt_base.day, tzinfo=POLAND_TZ)
-        
+        # Wymień dzień, miesiąc i rok na podstawie wejścia, zachowując czas (HH:MM) i strefę PL (UTC+2)
+        final_dt = dt_local.replace(
+            year=dt_base_naive.year, 
+            month=dt_base_naive.month, 
+            day=dt_base_naive.day,
+            tzinfo=POLAND_TZ 
+        )
     else:
-        final_dt = dt_local # Czas już ustawiony na dziś w strefie polskiej
+        final_dt = dt_local 
 
-    # Jeśli czas (bez daty) minął w STREFIE POLSKIEJ, zakładamy, że chodzi o jutro
+    # 3. Jeśli czas (bez daty) minął w STREFIE POLSKIEJ, zakładamy, że chodzi o jutro
     if final_dt < now_pl and not data_str:
         final_dt += timedelta(days=1)
     
-    return int(final_dt.timestamp())
-# --- KONIEC FUNKCJI TIMERA ---
+    # 4. Konwersja na Unix Timestamp (MUSI BYĆ W UTC, aby Discord poprawnie wyświetlił czas)
+    final_dt_utc = final_dt.astimezone(timezone.utc) 
+    return int(final_dt_utc.timestamp())
+# --- KONIEC POPRAWIONEJ FUNKCJI TIMERA ---
 
 
 # --- Discord Client ---
@@ -685,8 +689,12 @@ async def create_squad(interaction: discord.Interaction, rola: discord.Role, tyt
 async def create_capt(interaction: discord.Interaction, czas_zakonczenia: str, data_zakonczenia: str = None, link_do_zdjecia: str = None):
     await interaction.response.defer(ephemeral=True) 
     
-    # POPRAWKA: Wywołanie funkcji create_timestamp
-    timestamp = create_timestamp(czas_zakonczenia, data_zakonczenia)
+    # POPRAWKA: Wywołanie funkcji create_timestamp (z uwzględnieniem strefy PL)
+    try:
+        timestamp = create_timestamp(czas_zakonczenia, data_zakonczenia)
+    except ValueError as e:
+        await interaction.followup.send(f"❌ Błąd formatu czasu/daty: **{e}**", ephemeral=True)
+        return
     
     # Sprawdzenie, czy czas już minął
     started = discord.utils.utcnow().timestamp() >= timestamp
@@ -720,8 +728,12 @@ async def create_capt(interaction: discord.Interaction, czas_zakonczenia: str, d
 async def airdrop_command(interaction: discord.Interaction, channel: discord.TextChannel, voice: discord.VoiceChannel, role: discord.Role, opis: str, czas_zakonczenia: str, data_zakonczenia: str = None):
     await interaction.response.defer(ephemeral=True)
     
-    # POPRAWKA: Wywołanie funkcji create_timestamp
-    timestamp = create_timestamp(czas_zakonczenia, data_zakonczenia)
+    # POPRAWKA: Wywołanie funkcji create_timestamp (z uwzględnieniem strefy PL)
+    try:
+        timestamp = create_timestamp(czas_zakonczenia, data_zakonczenia)
+    except ValueError as e:
+        await interaction.followup.send(f"❌ Błąd formatu czasu/daty: **{e}**", ephemeral=True)
+        return
         
     # POPRAWKA: Przekazanie timestamp do widoku
     view = AirdropView(0, opis, voice, interaction.user.display_name, timestamp) 
