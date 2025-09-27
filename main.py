@@ -1,6 +1,6 @@
 import discord
 from discord import app_commands, ui
-from discord.ext import tasks # DODANO: Do obsługi zadań cyklicznych
+from discord.ext import tasks
 import os
 import sys
 import threading
@@ -306,7 +306,7 @@ class CapturesView(ui.View):
         self.image_url = image_url
         self.timestamp = timestamp 
         self.custom_id = f"captures_view:{capture_id}"
-        self.started = started # DODANO: Flaga informująca, czy captures się rozpoczął
+        self.started = started # Flaga informująca, czy captures się rozpoczął
 
     def make_embed(self, guild: discord.Guild):
         participants_ids = captures.get(self.capture_id, {}).get("participants", [])
@@ -317,12 +317,17 @@ class CapturesView(ui.View):
         if self.image_url:
             embed.set_image(url=self.image_url)
 
-        # POPRAWKA: Dynamiczny opis timera
+        # NAPRAWA TIMERU ZGODNIE Z ŻĄDANIEM UŻYTKOWNIKA (bez emoji, bez dat)
         if self.timestamp:
             if self.started:
-                time_str = "🟢 **CAPT rozpoczął się!**"
+                # Stan PO rozpoczęciu
+                time_str = "**CAPT rozpoczął się**" 
             else:
-                time_str = f"🏁 **Zaczyna się o** <t:{self.timestamp}:t> (Pełna data: <t:{self.timestamp}:F>)"
+                # Stan PRZED rozpoczęciem (używa formatu t - sama godzina, oraz formatu R - odliczanie)
+                # Używamy formatu t (<t:timestamp:t>) dla samej godziny, i R (<t:timestamp:R>) dla odliczania
+                time_str = f"Rozpoczęcie CAPT o <t:{self.timestamp}:t> (<t:{self.timestamp}:R>)" 
+            
+            # Wg życzenia, nie dodajemy tu emoji
             embed.add_field(name="Czas rozpoczęcia:", value=time_str, inline=False)
         
         if participants_ids:
